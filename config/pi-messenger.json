@@ -1,0 +1,7 @@
+{
+  "autoRegister": false,
+  "autoRegisterPaths": ["~/work/*"],
+  "registrationContext": false,
+  "autoOverlay": false,
+  "autoOverlayPlanning": false
+}

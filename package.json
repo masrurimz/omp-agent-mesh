@@ -1,0 +1,37 @@
+{
+  "name": "omp-agent-mesh",
+  "version": "0.1.0",
+  "description": "omp extension that lets separate omp sessions see, message, and coordinate with each other (wraps pi-messenger; subagents stay on omp IRC).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/masrurimz/omp-agent-mesh.git"
+  },
+  "type": "module",
+  "scripts": {
+    "lint": "oxlint",
+    "fmt": "oxfmt --check .",
+    "fmt:write": "oxfmt --write .",
+    "typecheck": "bun check --no-script --threads 4",
+    "test": "bun test test/",
+    "smoke": "bun scripts/smoke.ts",
+    "check": "bun run lint && bun run fmt && bun run typecheck && bun run test"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.6",
+    "effect": "4.0.6",
+    "pi-messenger": "0.15.2",
+    "typebox": "1.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.4",
+    "oxfmt": "0.74.0",
+    "oxlint": "1.89.0",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929"
+  },
+  "omp": {
+    "extensions": [
+      "src/index.ts"
+    ]
+  }
+}
