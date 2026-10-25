@@ -7,10 +7,10 @@
       "dependencies": {
         "@effect/platform-bun": "4.0.6",
         "effect": "4.0.6",
-        "pi-messenger": "0.15.2",
         "typebox": "1.4.3",
       },
       "devDependencies": {
+        "@earendil-works/pi-coding-agent": "1.4.0",
         "@types/bun": "1.4.4",
         "oxfmt": "0.74.0",
         "oxlint": "1.89.0",
@@ -310,8 +310,6 @@
     "partial-json": ["partial-json@0.1.7", "", {}, "sha512-Njv/59hHaokb/hRUjce3Hdv12wd60MtM9Z5Olmn+nehe0QDAsRtRbJPvJ0Z91TusF0SuZRIvnM+S4l6EIP8leA=="],
 
     "path-key": ["path-key@3.1.1", "", {}, "sha512-ojmeN0qd+y0jszEtoY48r0Peq5dwMEkIlCOu6Q5f41lfkswXuKtYrhgoTpLnyIcHm24Uhqx+5Tqm2InSwLhE6Q=="],
-
-    "pi-messenger": ["pi-messenger@0.15.2", "", { "peerDependencies": { "@earendil-works/pi-agent-core": "*", "@earendil-works/pi-ai": "*", "@earendil-works/pi-coding-agent": "*", "@earendil-works/pi-tui": "*", "typebox": "*" }, "bin": { "pi-messenger": "install.mjs" } }, "sha512-GcoI/FaI98dl+ZQq54W8VnCZ0kuR0VaJMu4myOh3awddOD6A/0hRU+ALzy//Jdixsol0ANQWpvyFphS4It9kiQ=="],
 
     "proper-lockfile": ["proper-lockfile@4.1.2", "", { "dependencies": { "graceful-fs": "^4.2.4", "retry": "^0.12.0", "signal-exit": "^3.0.2" } }, "sha512-TjNPblN4BwAWMXU8s9AEz4JmQxnD1NNL7bNOY/AKUzyamc379FWASUhc/K1pL2noVb+XmZKLL68cjzLsiOAMaA=="],
 

@@ -13,8 +13,7 @@
     "strict": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
-    "types": ["bun"],
-    "paths": { "pi-messenger": ["./src/pi-messenger.d.ts"] }
+    "types": ["bun"]
   },
   "include": ["src", "test", "scripts"]
 }

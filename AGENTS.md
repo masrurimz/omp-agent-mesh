@@ -1,6 +1,6 @@
 # omp-agent-mesh
 
-An omp extension package. It wraps `pi-messenger` so separate omp sessions can see and message each other, and adds a startup peer summary. Subagent sessions are kept off the mesh; they use omp's built-in IRC.
+An omp extension package implementing a small agent mesh: separate omp sessions register presence, message each other (waking the receiver), claim files, and read a shared feed. State is files under `~/.omp/agent/mesh/`. Subagent sessions are kept off the mesh; they use omp's built-in IRC.
 
 ## Effect
 
@@ -24,7 +24,7 @@ Type checking is `bun check`. The language server is tsrs (pinned as a devDepend
 
 ## Layout
 
-- `src/gate.ts` keeps subagent sessions from joining the mesh, and absolutizes edit/reserve paths so pi-messenger's exact-string reservation matching works with relative paths.
-- `src/registry.ts` reads pi-messenger's registry with Effect Schema at the boundary.
-- `src/brief.ts` formats the peer summary. Pure; no Effect.
-- `src/index.ts` is the omp entry point and the only place omp callbacks meet the Effect runtime.
+- `src/index.ts` is the omp entry point and the engine (tool, lifecycle hooks, inbox delivery, claim blocking).
+- `src/store.ts` owns the filesystem state and the send throttle.
+- `src/registry.ts` reads presence with Effect Schema at the boundary (brief, `peers`).
+- `src/paths.ts` holds path matching rules. `src/brief.ts` formats the peer summary (pure).
