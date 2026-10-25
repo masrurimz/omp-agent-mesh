@@ -62,11 +62,14 @@ Agents only coordinate if they're told to. Add something like this to your globa
 
 Effect is used only where there is IO or failure to handle (reading the registry). The gate and the formatter are plain functions.
 
-## Not included
+## Deferred follow-ups
 
-- **Port allocation.** Agents announce ports in their status notes and check `ss -ltn` before binding. If collisions still happen, [port-selector](https://github.com/dapi/port-selector) is a good complement.
-- **A Tern status-line plugin.** pi-messenger already shows peer and unread counts in omp's status bar.
-- **Cross-machine meshes.** The registry is local files, so agents on different machines don't see each other.
+Not in v1, tracked as issues:
+
+- [#1](https://github.com/masrurimz/omp-agent-mesh/issues/1) stable per-worktree ports (port-selector). For now, agents announce ports in their status notes and check `ss -ltn` before binding.
+- [#2](https://github.com/masrurimz/omp-agent-mesh/issues/2) Tern status-line plugin for mesh state. For now, pi-messenger shows peer and unread counts in omp's status bar.
+- [#3](https://github.com/masrurimz/omp-agent-mesh/issues/3) cross-machine mesh. The registry is local files, so agents on different machines don't see each other yet.
+- [#4](https://github.com/masrurimz/omp-agent-mesh/issues/4) non-interrupting message delivery (`aside` instead of `steer`)
 
 ## Development
 
