@@ -1,7 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, Option, Scope } from "effect";
-import { MainRegistry } from "../src/services/main-registry.ts";
+import { join } from "node:path";
+import { Effect, Exit, FileSystem, Option, Scope } from "effect";
 import { Feed } from "../src/services/feed.ts";
+import { MainRegistry } from "../src/services/main-registry.ts";
+import { MeshConfig } from "../src/services/mesh-config.ts";
 import { MeshSession } from "../src/services/mesh-session.ts";
 import { Presence } from "../src/services/presence.ts";
 import { bodiesOf, deliveries, joinInput, withMesh } from "./support.ts";
@@ -23,7 +25,7 @@ describe("session lifecycle", () => {
           (yield* presence.list).map((p) => p.sessionId),
           ["s1"],
         );
-        assert.strictEqual((yield* session.phase)._tag, "Idle");
+        assert.strictEqual(yield* session.phase, "idle.synced");
         assert.isTrue(Option.isSome(yield* registry.current));
 
         yield* Scope.close(scope, Exit.void);
@@ -44,7 +46,7 @@ describe("session lifecycle", () => {
         const session = yield* open(scope, "s1");
 
         yield* session.agentStarted;
-        assert.strictEqual((yield* session.phase)._tag, "Working");
+        assert.strictEqual(yield* session.phase, "working.synced");
         assert.strictEqual((yield* presence.list)[0]?.status, "working");
         yield* session.agentEnded;
         assert.strictEqual((yield* presence.list)[0]?.status, "idle");
@@ -52,6 +54,31 @@ describe("session lifecycle", () => {
         yield* Scope.close(scope, Exit.void);
       }),
     ),
+  );
+
+  it.live(
+    "a failing presence write fails the turn with MeshIoError and the next turn recovers",
+    () =>
+      withMesh(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const { meshDir } = yield* MeshConfig;
+          const agentsDir = join(meshDir, "agents");
+          const scope = yield* Scope.make();
+          const session = yield* open(scope, "s1");
+
+          yield* fs.remove(agentsDir, { recursive: true });
+          const error = yield* Effect.flip(session.agentStarted);
+          assert.strictEqual(error._tag, "MeshIoError");
+          assert.strictEqual(yield* session.phase, "working.unsynced");
+
+          yield* fs.makeDirectory(agentsDir, { recursive: true });
+          yield* session.agentEnded;
+          assert.strictEqual(yield* session.phase, "idle.synced");
+
+          yield* Scope.close(scope, Exit.void);
+        }),
+      ),
   );
 });
 

@@ -4,7 +4,6 @@ import {
   ClaimConflict,
   EmptyBody,
   InvalidInput,
-  InvalidTransition,
   MeshIoError,
   NotJoined,
   TargetAmbiguous,
@@ -95,7 +94,6 @@ export const MeshFailure = Schema.Union([
   ClaimConflict,
   EmptyBody,
   InvalidInput,
-  InvalidTransition,
   MeshIoError,
 ]);
 export type MeshFailure = typeof MeshFailure.Type;

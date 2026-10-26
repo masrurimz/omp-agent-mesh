@@ -129,9 +129,10 @@ const a = await aPromise;
 console.log("\n== agent A finished ==");
 console.log(a.out.slice(-3_000));
 
-const aName = ownName(a.out);
-const bName = ownName(b.out);
 const newFeed = await feedSince(feedMark);
+const ackEvent = /"agent":"(\w+)","target":"(\w+)","preview":"ACK-42"/.exec(newFeed);
+const aName = ackEvent?.[1] ?? ownName(a.out);
+const bName = ackEvent?.[2] ?? ownName(b.out);
 
 check(
   "1. A and B see each other in peers",

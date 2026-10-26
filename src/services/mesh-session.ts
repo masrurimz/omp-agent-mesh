@@ -1,3 +1,4 @@
+import { createEffectActor, join, send as sendEvent, waitFor } from "@xstate/effect";
 import { Clock, Context, Effect, Layer, PubSub, Stream, SubscriptionRef } from "effect";
 import { formatStatus } from "../domain/brief.ts";
 import { EmptyBody, InvalidInput } from "../domain/errors.ts";
@@ -12,17 +13,19 @@ import {
 } from "../domain/peers.ts";
 import { claimPaths, releasePaths } from "../domain/reservations.ts";
 import {
-  events,
-  joining,
-  type Lifecycle,
-  type LifecycleEvent,
-  transition,
-} from "../lifecycle/lifecycle.ts";
+  ENDED_PHASES,
+  JOINED_PHASES,
+  phaseOf,
+  type SessionPhase,
+  sessionMachine,
+  STARTED_PHASES,
+} from "../lifecycle/session-machine.ts";
 import { Claims } from "./claims.ts";
 import { Feed } from "./feed.ts";
 import { Inbox } from "./inbox.ts";
 import { MainRegistry } from "./main-registry.ts";
 import { Presence } from "./presence.ts";
+import { SessionState, type State } from "./session-state.ts";
 import { Throttle } from "./throttle.ts";
 
 const RECENT_LIMIT = 5;
@@ -37,24 +40,6 @@ export interface JoinInput {
   readonly model: string | undefined;
   readonly readTitle: Effect.Effect<string | undefined>;
 }
-
-interface State {
-  readonly phase: Lifecycle;
-  readonly peer: Peer;
-  readonly subs: ReadonlyMap<string, string>;
-  readonly unread: number;
-  readonly peerCount: number;
-}
-
-const stamp = (state: State, now: number): State => ({
-  ...state,
-  peer: {
-    ...state.peer,
-    status: state.phase._tag === "Working" ? "working" : "idle",
-    subagents: state.subs.size,
-    updatedAt: now,
-  },
-});
 
 const withPeer = (state: State, patch: Partial<Peer>): State => ({
   ...state,
@@ -84,8 +69,7 @@ export class MeshSession extends Context.Service<MeshSession>()(
       const joinedAt = yield* Clock.currentTimeMillis;
       const startOffset = yield* inbox.size(input.sessionId);
 
-      const state = yield* SubscriptionRef.make<State>({
-        phase: joining,
+      const store = yield* SessionState.make({
         peer: {
           name,
           pid: process.pid,
@@ -105,49 +89,31 @@ export class MeshSession extends Context.Service<MeshSession>()(
         unread: 0,
         peerCount: others.length,
       });
+      const state = store.ref;
+      const { persist } = store;
       const deliveries = yield* Effect.acquireRelease(
         PubSub.unbounded<MeshMessage>({ replay: DELIVERY_REPLAY }),
         PubSub.shutdown,
       );
 
-      const commit = <E>(change: (current: State) => Effect.Effect<State, E>) =>
-        SubscriptionRef.updateAndGetEffect(state, (current) =>
-          Effect.gen(function* () {
-            const next = stamp(yield* change(current), yield* Clock.currentTimeMillis);
-            yield* presence.write(next.peer);
-            return next;
-          }),
-        );
+      const actor = yield* createEffectActor(sessionMachine, {
+        input: { name, sessionId: input.sessionId },
+      }).pipe(Effect.provideService(SessionState, store));
+      yield* Effect.addFinalizer(() =>
+        sendEvent(actor, { type: "LEAVE" }).pipe(Effect.andThen(join(actor)), Effect.orDie),
+      );
 
-      const persist = (change: (current: State) => State) =>
-        commit((current) => Effect.succeed(change(current)));
-
-      const advance = (event: LifecycleEvent) =>
-        commit((current) =>
-          Effect.fromResult(transition(current.phase, event)).pipe(
-            Effect.map((phase) => ({
-              ...current,
-              phase,
-              unread: event._tag === "AgentStarted" ? 0 : current.unread,
-            })),
+      const awaitPhase = (accepted: ReadonlySet<SessionPhase>) =>
+        waitFor(actor, (snapshot) => accepted.has(phaseOf(snapshot))).pipe(
+          Effect.orDie,
+          Effect.flatMap((snapshot) =>
+            phaseOf(snapshot).endsWith(".unsynced") && snapshot.context.failure
+              ? Effect.fail(snapshot.context.failure)
+              : Effect.void,
           ),
         );
 
-      const depart = SubscriptionRef.updateEffect(state, (current) =>
-        Effect.fromResult(transition(current.phase, events.departed)).pipe(
-          Effect.map((phase) => ({ ...current, phase })),
-        ),
-      );
-
-      yield* Effect.acquireRelease(
-        advance(events.joined).pipe(Effect.andThen(feedLog.append({ type: "join", agent: name }))),
-        () =>
-          depart.pipe(
-            Effect.andThen(feedLog.append({ type: "leave", agent: name })),
-            Effect.andThen(presence.remove(input.sessionId)),
-            Effect.catch((error) => Effect.logWarning(`leave cleanup failed: ${error.message}`)),
-          ),
-      );
+      yield* awaitPhase(JOINED_PHASES);
 
       yield* inbox.messages(input.sessionId, startOffset).pipe(
         Stream.filter((message) => message.from !== name),
@@ -324,7 +290,7 @@ export class MeshSession extends Context.Service<MeshSession>()(
         sessionId: input.sessionId,
         group: input.group,
         view: SubscriptionRef.get(state).pipe(Effect.map((s) => s.peer)),
-        phase: SubscriptionRef.get(state).pipe(Effect.map((s) => s.phase)),
+        phase: Effect.sync(() => phaseOf(actor.getSnapshot())),
         peers: livePeers,
         status: SubscriptionRef.changes(state).pipe(
           Stream.map((s) => formatStatus(name, s.peerCount, s.unread)),
@@ -341,8 +307,12 @@ export class MeshSession extends Context.Service<MeshSession>()(
         guardEdit,
         subagentStarted,
         subagentEnded,
-        agentStarted: advance(events.agentStarted).pipe(Effect.asVoid),
-        agentEnded: advance(events.agentEnded).pipe(Effect.asVoid),
+        agentStarted: sendEvent(actor, { type: "AGENT_START" }).pipe(
+          Effect.andThen(awaitPhase(STARTED_PHASES)),
+        ),
+        agentEnded: sendEvent(actor, { type: "AGENT_END" }).pipe(
+          Effect.andThen(awaitPhase(ENDED_PHASES)),
+        ),
       };
     }),
   },

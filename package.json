@@ -1,6 +1,6 @@
 {
   "name": "omp-agent-mesh",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "omp extension that lets separate omp sessions see, message, and coordinate with each other. Own Effect-based mesh engine: repo groups, presence, waking messages, throttled sends, file claims, subagent attribution.",
   "license": "MIT",
   "repository": {
@@ -20,8 +20,10 @@
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.6",
+    "@xstate/effect": "1.0.0-alpha.9",
     "effect": "4.0.6",
-    "human-id": "4.2.2"
+    "human-id": "4.2.2",
+    "xstate": "6.0.0-alpha.70"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.4.0",

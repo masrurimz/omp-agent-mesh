@@ -72,15 +72,6 @@ export class InvalidInput extends Schema.TaggedError<
   }
 }
 
-export class InvalidTransition extends Schema.TaggedError<
-  InvalidTransition,
-  { readonly brand: unique symbol }
->()("InvalidTransition", { from: Schema.String, event: Schema.String }) {
-  override get message(): string {
-    return `MESH_INVALID_TRANSITION: a session in state ${this.from} cannot handle ${this.event}. Fix: this is a lifecycle ordering bug; report it with the omp log.`;
-  }
-}
-
 export class MeshIoError extends Schema.TaggedError<
   MeshIoError,
   { readonly brand: unique symbol }
