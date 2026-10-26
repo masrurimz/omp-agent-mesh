@@ -1,25 +1,27 @@
 import { BunFileSystem } from "@effect/platform-bun";
-import { Effect, FileSystem, Layer, type Scope } from "effect";
-import { MainRegistry } from "../src/main-registry.ts";
-import { MeshStore } from "../src/mesh-store.ts";
-import type { MeshMessage } from "../src/message.ts";
-import type { Peer } from "../src/peer.ts";
-import type { JoinInput } from "../src/session.ts";
+import { Effect, FileSystem, Layer, Stream } from "effect";
+import type { MeshMessage } from "../src/domain/message.ts";
+import type { Peer } from "../src/domain/peer.ts";
+import { MeshServices } from "../src/services/live.ts";
+import { MeshConfig } from "../src/services/mesh-config.ts";
+import { type JoinInput, MeshSession } from "../src/services/mesh-session.ts";
 
-type MeshServices = MeshStore | MainRegistry | Scope.Scope;
+export const TestMesh = Layer.unwrap(
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "mesh-test-" });
+    return MeshServices.pipe(
+      Layer.provideMerge(MeshConfig.configLayer({ home: dir, meshDir: dir, roots: ["~/work/*"] })),
+    );
+  }),
+).pipe(Layer.provideMerge(BunFileSystem.layer));
 
-export const runMesh = <A, E>(
-  program: (dir: string) => Effect.Effect<A, E, MeshServices>,
-): Promise<A> =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "mesh-test-" });
-      return yield* program(dir).pipe(
-        Effect.provide(Layer.mergeAll(MeshStore.layer(dir), MainRegistry.layer)),
-      );
-    }).pipe(Effect.scoped, Effect.provide(BunFileSystem.layer)),
-  );
+export const withLayer =
+  <ROut, E, RIn>(layer: Layer.Layer<ROut, E, RIn>) =>
+  <A, E2, R>(body: Effect.Effect<A, E2, R>) =>
+    Layer.build(layer).pipe(Effect.flatMap((context) => Effect.provideContext(body, context)));
+
+export const withMesh = withLayer(TestMesh);
 
 export const peer = (sessionId: string, extra: Partial<Peer> = {}): Peer => ({
   name: `Peer${sessionId}`,
@@ -36,30 +38,22 @@ export const peer = (sessionId: string, extra: Partial<Peer> = {}): Peer => ({
 
 export const DEAD_PID = 99_999_999;
 
-export const joinInput = (
-  sessionId: string,
-  extra: Partial<JoinInput> = {},
-  inbox: Array<MeshMessage> = [],
-): JoinInput => ({
+export const joinInput = (sessionId: string, extra: Partial<JoinInput> = {}): JoinInput => ({
   sessionId,
   cwd: "/work/repo",
   group: "/work/repo",
   branch: undefined,
   model: undefined,
-  readTitle: Effect.succeed(undefined),
-  onMessage: (message) => Effect.sync(() => void inbox.push(message)),
+  readTitle: Effect.undefined,
   ...extra,
 });
 
-export const eventually = <A>(
-  probe: Effect.Effect<A | undefined>,
-  attempts = 150,
-): Effect.Effect<A | undefined> =>
-  Effect.gen(function* () {
-    for (let i = 0; i < attempts; i++) {
-      const value = yield* probe;
-      if (value !== undefined) return value;
-      yield* Effect.sleep(20);
-    }
-    return undefined;
-  });
+export const deliveries = (session: MeshSession["Service"], count: number) =>
+  session.deliveries.pipe(
+    Stream.take(count),
+    Stream.runCollect,
+    Effect.timeout("4 seconds"),
+    Effect.map((messages) => [...messages]),
+  );
+
+export const bodiesOf = (messages: ReadonlyArray<MeshMessage>) => messages.map((m) => m.body);

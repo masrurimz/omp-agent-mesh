@@ -1,6 +1,6 @@
 import { Option, Schema } from "effect";
-import { FeedEvent } from "../src/message.ts";
-import { Peer } from "../src/peer.ts";
+import { FeedEvent } from "../src/domain/message.ts";
+import { Peer } from "../src/domain/peer.ts";
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 
 const root = `${process.env.HOME}/work/labs`;

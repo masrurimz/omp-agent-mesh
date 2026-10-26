@@ -5,7 +5,7 @@ export const MeshMessage = Schema.Struct({
   to: Schema.String,
   body: Schema.String,
   broadcast: Schema.Boolean,
-  at: Schema.Number,
+  at: Schema.Finite,
 });
 
 export const FeedEvent = Schema.Struct({

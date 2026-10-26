@@ -8,35 +8,37 @@ This repo uses Effect 4. Before writing any Effect code, read `node_modules/effe
 
 Architecture rules:
 
-- IO lives in the `MeshStore` service (Effect `FileSystem`); every file is decoded with Schema at the boundary and failures are the tagged `MeshIoError`.
-- One session is one `Scope`: `joinMesh` registers finalizers (leave feed event, presence removal, `MainRegistry` unregister) and forks the inbox watcher plus 5s heartbeat with `Effect.forkScoped`. Never hold session resources outside that scope.
-- State is a `Ref`, time is `Clock` (so `TestClock` drives tests). Presence writes are serialized by a semaphore.
-- The runtime and `MainRegistry` are module-level: omp rebinds the factory per session but shares module state, which is how a subagent session reaches its parent. Callbacks in `src/index.ts` stay thin: `runtime.runPromise`, log failures, never throw.
-- Pure rules (target resolution, groups, paths, formatting) stay plain functions in `peers.ts`, `paths.ts`, `brief.ts`.
-- No `any`, no `as` casts except the documented `ASIDE_OPTIONS` seam in `src/index.ts`. Host fields missing from the pinned pi types are read with Schema in `src/host.ts`.
+- Failures are `Schema.TaggedError` classes in `src/domain/errors.ts`, each with context and a `MESH_*` fix-hint message. Methods fail with them; never return `{ kind: "none" }`-style result objects. Tool text derives from the error.
+- Services are `Context.Service` classes whose `make` captures dependencies, so methods have no requirements, plus `static layer`. `src/services/live.ts` composes them. IO lives in `Presence`, `Inbox`, `Feed` (Effect `FileSystem`); every file is decoded with Schema at the boundary and failures are `MeshIoError`. Config comes from `MeshConfig`; tests use `MeshConfig.configLayer(values)`.
+- One session is one `Scope`: `MeshSession.make` registers finalizers (leave feed event, presence removal, `MainRegistry` unregister) and forks the inbox watcher plus 5s heartbeat with `Effect.forkScoped`. Never hold session resources outside that scope.
+- Session state is a `SubscriptionRef` and deliveries are a `PubSub`; time is `Clock` (so `TestClock` drives tests). Lifecycle is the pure Schema tagged union in `src/lifecycle/lifecycle.ts`; invalid transitions are `InvalidTransition`.
+- The `mesh` tool input, output, and failures are Schemas in `src/contract/`. `defineMeshTool` derives the omp parameters from the input Schema and decodes at the edge; never hand-write parameter schemas.
+- The only `ManagedRuntime` is the process runtime in `src/omp/runtime.ts`; `runPromise` is called only in `src/omp/index.ts`, which stays thin: run, log failures, never throw. No module-level `let`. Tests never use `Effect.run*` or a `ManagedRuntime`.
+- Pure rules (target resolution, groups, paths, formatting) stay plain functions in `src/domain/`.
+- No `any`, no `as` casts except the documented `ASIDE_OPTIONS` seam in `src/omp/index.ts`. Host fields missing from the pinned pi types are read with Schema in `src/omp/host.ts`.
+- No comments except a non-obvious why.
 
 ## Checks
 
 Run one after another, never in parallel:
 
 ```sh
-bun run lint        # oxlint
-bun run fmt         # oxfmt --check
-bun run typecheck   # bun check --no-script --threads 4
-bun run test        # bun test test/
-bun run smoke       # real omp processes; needs a configured model provider
+bun run lint            # oxlint
+bun run fmt             # oxfmt --check
+bun run typecheck       # effect-tsrs diagnostics --strict (floating effects fail)
+bun run typecheck:fast  # bun check --no-script --threads 4
+bun run test            # vitest run (@effect/vitest)
+bun run smoke           # real omp processes; needs a configured model provider
 ```
 
 On shared machines, wrap heavy runs: `systemd-run --user --scope -p MemoryMax=8G <cmd>`. Check `free -h` first; if less than 15 GB is available, wait.
 
-Type checking is `bun check`. The language server is tsrs (pinned as a devDependency; omp's launcher prefers the repo pin). There is no `typescript` package on purpose: both tools bundle TypeScript's lib files.
+The language server is tsrs (pinned as a devDependency; omp's launcher prefers the repo pin). There is no `typescript` package on purpose: both tools bundle TypeScript's lib files.
 
-Tests assert behavior (store round-trips, scope cleanup, throttle under `TestClock`, subagent attribution), not internals.
+Tests assert behavior and properties (claims never block their owner and always block others, throttle delay under `TestClock`, target resolution, broadcast scope, lifecycle model, scope cleanup), not internals or wiring. Use `it.effect`, `it.layer`, `it.prop`. When adding a property, plant a bug once to confirm it fails.
 
 ## Layout
 
-- `src/index.ts` is the omp entry point (tool, lifecycle hooks, claim blocking for main and subagent sessions).
-- `src/session.ts` is `joinMesh` and the `MeshSession` operations. `src/mesh-store.ts` is the store. `src/main-registry.ts` links subagents to the main session.
-- `src/throttle.ts`, `src/git.ts`, `src/config.ts`, `src/host.ts`, `src/runtime.ts` are the supporting Effects and boundaries.
-- `src/peer.ts`, `src/message.ts`, `src/errors.ts` hold the Schemas and the error.
-- `src/peers.ts`, `src/paths.ts`, `src/brief.ts` hold the pure rules and formatters.
+- `src/domain/` Schemas, errors, and pure rules. `src/lifecycle/` the session state machine.
+- `src/services/` the services and `live.ts` composition. `src/contract/` the tool contract and `defineMeshTool`.
+- `src/omp/` the host edge: `index.ts` (hooks, registration), `mesh-tool.ts`, `runtime.ts`, `git.ts`, `host.ts`.

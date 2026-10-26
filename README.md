@@ -6,7 +6,7 @@ Each main session joins a mesh on startup: it can list live peers, send messages
 
 There is no daemon and no server. Agents coordinate through files under `~/.omp/agent/mesh/` (presence, inboxes, feed), maintained by the extension inside each omp process.
 
-History: v0.1 wrapped pi-messenger. v0.2 was our own imperative engine. v0.3 rebuilds it on Effect 4 (typed store, per-session scope, Schema at every file boundary) and adds repo groups, title addressing, and subagent attribution.
+History: v0.1 wrapped pi-messenger. v0.2 was our own imperative engine. v0.3 rebuilt it on Effect 4. v0.4 makes it idiomatic Effect: typed errors, `Context.Service` services composed in one layer, a Schema-derived tool contract, a lifecycle state machine, live state on `SubscriptionRef`/`PubSub`, and `@effect/vitest` property tests.
 
 ## Concepts
 
@@ -56,25 +56,27 @@ Agents only coordinate if they are told to. Add something like this to your glob
 
 ## How it works
 
-| File                                             | Job                                                                                                                                                           |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/index.ts`                                   | The omp entry point. Thin: registers the `mesh` tool and lifecycle hooks, and calls `runtime.runPromise` at each callback. Failures are logged, never thrown. |
-| `src/session.ts`                                 | `joinMesh`: builds one session inside a `Scope`. State lives in a `Ref`; an inbox watcher merged with a 5s heartbeat runs as a fiber in that scope.           |
-| `src/mesh-store.ts`                              | `MeshStore` service over Effect's `FileSystem`: presence, inbox, feed IO. Everything is Schema-decoded at the boundary; failures are `MeshIoError`.           |
-| `src/main-registry.ts`                           | `MainRegistry` service: the process-level link from subagent sessions to their parent main session.                                                           |
-| `src/throttle.ts`                                | Token-bucket throttle on `Ref` and `Clock` (burst 5, then 1 per 20s). It delays and never rejects, so it runs under `TestClock`.                              |
-| `src/git.ts`                                     | Git lookups as Effects: branch and repo group, with a fallback to the cwd when git fails.                                                                     |
-| `src/config.ts`                                  | Reads `~/.omp/agent/mesh.json` with Schema and matches cwd against the roots.                                                                                 |
-| `src/host.ts`                                    | Schema readers for omp host fields the pinned pi types lack (`ctx.agent`, `pi.logger`), so there are no casts.                                                |
-| `src/runtime.ts`                                 | One `ManagedRuntime` per process; Effect logs go to omp's logger.                                                                                             |
-| `src/peer.ts`, `src/message.ts`, `src/errors.ts` | The `Peer`, `MeshMessage`, and `FeedEvent` Schemas and the tagged `MeshIoError`.                                                                              |
-| `src/peers.ts`, `src/paths.ts`, `src/brief.ts`   | Pure functions: target resolution, group and claim rules, path rules, peer formatting.                                                                        |
+| Path                                | Job                                                                                                                                                                                                                                     |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/domain/errors.ts`              | One `Schema.TaggedError` per failure (`NotJoined`, `TargetNotFound`, `TargetAmbiguous`, `ClaimConflict`, `EmptyBody`, `InvalidInput`, `InvalidTransition`, `MeshIoError`). Each carries context and a `MESH_*` message with a fix hint. |
+| `src/domain/*`                      | Schemas (`Peer`, `MeshMessage`, `FeedEvent`) and the pure rules: target resolution, groups, claim matching, paths, roots, reservations, peer formatting.                                                                                |
+| `src/lifecycle/lifecycle.ts`        | Session state as a Schema tagged union (`Joining`, `Idle`, `Working`, `Left`) with a pure `transition`; invalid transitions fail with `InvalidTransition`.                                                                              |
+| `src/services/*`                    | `Context.Service` classes whose `make` captures dependencies: `MeshConfig`, `Presence`, `Inbox`, `Feed`, `Claims`, `Throttle`, `MainRegistry`, and the scoped `MeshSession`. `live.ts` composes them into `MeshServices`.               |
+| `src/contract/*`                    | The `mesh` tool as a Schema tagged union per action, plus `defineMeshTool`, which derives the omp tool parameters from the Schema and decodes input at the edge.                                                                        |
+| `src/omp/index.ts`                  | The omp edge: registers the tool and hooks, and is the only place that calls `runtime.runPromise`. Failures are logged or returned as tool text, never thrown.                                                                          |
+| `src/omp/mesh-tool.ts`              | The `mesh` tool handler: maps each action onto session methods.                                                                                                                                                                         |
+| `src/omp/runtime.ts`                | The single process `ManagedRuntime`; Effect logs go to omp's logger.                                                                                                                                                                    |
+| `src/omp/git.ts`, `src/omp/host.ts` | Git lookups as Effects, and Schema readers for host fields the pinned pi types lack (`ctx.agent`, `pi.logger`).                                                                                                                         |
 
-**Cleanup guarantee.** `session_start` creates a `Scope` and runs `joinMesh` in it. Finalizers run in reverse order when the scope closes (`leave` action or `session_shutdown`): the heartbeat/watch fiber is interrupted, the session is unregistered from `MainRegistry`, then the leave event is appended and the presence file removed.
+**Typed errors.** Session methods fail with the tagged errors above; there are no result objects like `{ kind: "none" }`. Tool text derives from the error message, for example `MESH_TARGET_AMBIGUOUS: "auth" matches GoldXenon, RedOwl. Fix: send to one exact handle.`
 
-**Subagent linkage.** omp reuses the extension factory for every session in the process (`ctx.agent.kind === "sub"` identifies subagents) and keeps module-level state shared. The runtime and `MainRegistry` therefore live at module level. A subagent session finds its parent through `MainRegistry.current`. This assumes one main session per process, which holds for omp's TUI and print modes. In-process subagents running in an isolated worktree have a different cwd, so claims made with other absolute paths do not match their relative edits.
+**Tool schema.** `src/contract/mesh-contract.ts` defines the input as a Schema tagged union. `defineMeshTool` calls `Schema.toJsonSchemaDocument` on it and merges the per-action variants into the single object schema providers require (a key is required only when every action requires it). The decoder stays authoritative: input is decoded per action, and a bad call returns `MESH_INVALID_INPUT` text.
 
-A new session's first turn contains a hidden summary of peers in its repo. Direct messages are delivered with `aside` and start a turn when the receiver is idle; broadcasts are passive and never wake anyone.
+**Cleanup guarantee.** `session_start` creates a `Scope` and builds `MeshSession` in it. Finalizers run in reverse order when the scope closes (`leave` action or `session_shutdown`): the heartbeat/watch fibers are interrupted, the session is unregistered from `MainRegistry`, then the leave event is appended and the presence file removed.
+
+**Live state.** Session state is a `SubscriptionRef`. The status bar subscribes to its changes, and delivered messages flow through a `PubSub` the host subscribes to.
+
+**Subagent linkage.** omp reuses the extension factory for every session in the process (`ctx.agent.kind === "sub"` identifies subagents) and keeps process-level state shared. The one process `ManagedRuntime` and its `MainRegistry` therefore outlive any session. A subagent session finds its parent through `MainRegistry.current`. This assumes one main session per process, which holds for omp's TUI and print modes. In-process subagents running in an isolated worktree have a different cwd, so claims made with other absolute paths do not match their relative edits.
 
 ## Deferred follow-ups
 
@@ -90,15 +92,16 @@ Tracked as issues:
 ```sh
 bun run lint        # oxlint
 bun run fmt         # oxfmt --check
-bun run typecheck   # bun check --no-script --threads 4
-bun run test        # bun test test/
+bun run typecheck   # effect-tsrs diagnostics --strict
+bun run typecheck:fast # bun check --no-script --threads 4
+bun run test        # vitest run (@effect/vitest, property tests)
 bun run smoke       # real omp processes; needs a configured model provider
 bun run check       # all of the above except smoke, in order
 ```
 
 `bun run smoke` recreates `~/work/labs/mesh-test-{a,b,c}` (a git repo, a worktree of it, and a separate repo), starts real omp sessions (CommandCode DeepSeek), and asserts on the feed, presence, and inbox files rather than on model narration. Checks: peers see each other, a message wakes a busy agent and gets an ACK, a claimed file blocks another agent's edit, a fresh agent's startup brief names its peers, subagents stay off the mesh, sends are throttled rather than budget-rejected, broadcast stays in the repo group by default, `scope: "all"` reaches the other repo, a subagent's edit to a claimed file is blocked and attributed as `<Parent>/<subagent>`, and the parent's presence shows its running subagent count.
 
-Type checking is `bun check`; the language server is [tsrs](https://github.com/oxc-project/tsrs), pinned as a devDependency. There is deliberately no `typescript` package: both tools bundle TypeScript's lib files. Host API types come from `@earendil-works/pi-coding-agent` as a devDependency; omp rewrites those specifiers to its own packages at load time.
+`bun run typecheck` runs strict Effect diagnostics ([`@yielded/effect-tsrs`](https://www.npmjs.com/package/@yielded/effect-tsrs)): floating effects and other Effect rule violations fail the gate. `typecheck:fast` is the plain `bun check` pass; its language server is [tsrs](https://github.com/oxc-project/tsrs), pinned as a devDependency. There is deliberately no `typescript` package: both tools bundle TypeScript's lib files. Host API types come from `@earendil-works/pi-coding-agent` as a devDependency; omp rewrites those specifiers to its own packages at load time.
 
 ## License
 

@@ -13,7 +13,17 @@
     "strict": true,
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "allowedUnstableApis": [
+          "effect/FileSystem",
+          "@effect/platform-bun/BunFileSystem",
+          "@effect/vitest"
+        ]
+      }
+    ]
   },
-  "include": ["src", "test", "scripts"]
+  "include": ["src", "test", "scripts", "vitest.config.ts"]
 }

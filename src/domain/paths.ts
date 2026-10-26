@@ -1,5 +1,7 @@
 import { isAbsolute, relative, resolve } from "node:path";
 
+export const folderName = (cwd: string): string => cwd.split("/").filter(Boolean).at(-1) ?? cwd;
+
 // A scheme URI (xd://pi_messenger, skill://name) addresses a tool, not a file on disk.
 // Resolving one against cwd invents a path that matches no real file or reservation.
 const SCHEME_URI = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//;

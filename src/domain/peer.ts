@@ -3,18 +3,18 @@ import { Effect, Schema } from "effect";
 export const Reservation = Schema.Struct({
   pattern: Schema.String,
   reason: Schema.optional(Schema.String),
-  since: Schema.Number,
+  since: Schema.Finite,
 });
 
 export const RecentEdit = Schema.Struct({
   path: Schema.String,
   by: Schema.String,
-  at: Schema.Number,
+  at: Schema.Finite,
 });
 
 export const Peer = Schema.Struct({
   name: Schema.String,
-  pid: Schema.Number,
+  pid: Schema.Int,
   sessionId: Schema.String,
   cwd: Schema.String,
   group: Schema.optional(Schema.String),
@@ -24,9 +24,9 @@ export const Peer = Schema.Struct({
   status: Schema.Literals(["working", "idle"]),
   note: Schema.optional(Schema.String),
   reservations: Schema.Array(Reservation),
-  subagents: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  subagents: Schema.Finite.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
   recent: Schema.Array(RecentEdit).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
-  updatedAt: Schema.Number,
+  updatedAt: Schema.Finite,
 });
 
 export type Peer = typeof Peer.Type;

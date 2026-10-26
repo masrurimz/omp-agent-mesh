@@ -1,12 +1,8 @@
 import { humanId } from "human-id";
-import type { Peer, Reservation } from "./peer.ts";
-
-export interface ClaimConflict {
-  readonly peer: Peer;
-  readonly reservation: Reservation;
-}
-
-export const folderName = (cwd: string): string => cwd.split("/").filter(Boolean).at(-1) ?? cwd;
+import { Option, Result } from "effect";
+import { ClaimConflict, TargetAmbiguous, TargetNotFound } from "./errors.ts";
+import { matchesReservation } from "./paths.ts";
+import type { Peer } from "./peer.ts";
 
 export const isAlive = (pid: number): boolean => {
   try {
@@ -21,15 +17,22 @@ export const findConflict = (
   peers: ReadonlyArray<Peer>,
   selfSessionId: string,
   filePath: string,
-  matches: (filePath: string, pattern: string) => boolean,
-): ClaimConflict | undefined => {
+): Option.Option<ClaimConflict> => {
   for (const peer of peers) {
     if (peer.sessionId === selfSessionId) continue;
-    for (const reservation of peer.reservations) {
-      if (matches(filePath, reservation.pattern)) return { peer, reservation };
+    const reservation = peer.reservations.find((r) => matchesReservation(filePath, r.pattern));
+    if (reservation) {
+      return Option.some(
+        new ClaimConflict({
+          path: filePath,
+          holder: peer.name,
+          holderCwd: peer.cwd,
+          reason: reservation.reason,
+        }),
+      );
     }
   }
-  return undefined;
+  return Option.none();
 };
 
 export const repoGroup = (
@@ -48,24 +51,26 @@ export const effectiveGroup = (peer: Peer): string => peer.group ?? peer.cwd;
 export const titleCard = (title: string | undefined): string | undefined =>
   title ? /([A-Z][A-Z0-9_-]{1,15}):/.exec(title)?.[1] : undefined;
 
-export type TargetResolution =
-  | { readonly kind: "found"; readonly peer: Peer }
-  | { readonly kind: "ambiguous"; readonly names: ReadonlyArray<string> }
-  | { readonly kind: "none" };
-
-export const resolveTarget = (peers: ReadonlyArray<Peer>, query: string): TargetResolution => {
+export const resolveTarget = (
+  peers: ReadonlyArray<Peer>,
+  query: string,
+): Result.Result<Peer, TargetNotFound | TargetAmbiguous> => {
   const q = query.trim().toLowerCase();
-  if (!q) return { kind: "none" };
+  const notFound = Result.fail(new TargetNotFound({ query }));
+  if (!q) return notFound;
   const byHandle = peers.find((p) => p.name.toLowerCase() === q);
-  if (byHandle) return { kind: "found", peer: byHandle };
+  if (byHandle) return Result.succeed(byHandle);
   const matches = peers.filter(
     (p) =>
       titleCard(p.title)?.toLowerCase() === q ||
       (p.title ? p.title.toLowerCase().includes(q) : false),
   );
-  if (matches.length === 1 && matches[0]) return { kind: "found", peer: matches[0] };
-  if (matches.length > 1) return { kind: "ambiguous", names: matches.map((p) => p.name) };
-  return { kind: "none" };
+  const [only, second] = matches;
+  if (only && !second) return Result.succeed(only);
+  if (second) {
+    return Result.fail(new TargetAmbiguous({ query, candidates: matches.map((p) => p.name) }));
+  }
+  return notFound;
 };
 
 export type BroadcastScope = "group" | "all";

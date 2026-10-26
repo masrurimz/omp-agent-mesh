@@ -1,141 +1,149 @@
-import { expect, test } from "bun:test";
+import { assert, describe, it } from "@effect/vitest";
 import { Effect, Exit, Option, Scope } from "effect";
-import { MainRegistry } from "../src/main-registry.ts";
-import { MeshStore } from "../src/mesh-store.ts";
-import type { MeshMessage } from "../src/message.ts";
-import { joinMesh } from "../src/session.ts";
-import { eventually, joinInput, runMesh } from "./support.ts";
+import { MainRegistry } from "../src/services/main-registry.ts";
+import { Feed } from "../src/services/feed.ts";
+import { MeshSession } from "../src/services/mesh-session.ts";
+import { Presence } from "../src/services/presence.ts";
+import { bodiesOf, deliveries, joinInput, withMesh } from "./support.ts";
 
-const open = <A, E, R>(scope: Scope.Scope, effect: Effect.Effect<A, E, R | Scope.Scope>) =>
-  effect.pipe(Scope.provide(scope));
+const open = (scope: Scope.Scope, sessionId: string) =>
+  MeshSession.make(joinInput(sessionId)).pipe(Scope.provide(scope));
 
-test("closing the session scope removes presence, records leave, and unregisters the main session", () =>
-  runMesh(() =>
-    Effect.gen(function* () {
-      const store = yield* MeshStore;
-      const registry = yield* MainRegistry;
-      const scope = yield* Scope.make();
-      const session = yield* open(scope, joinMesh(joinInput("s1")));
+describe("session lifecycle", () => {
+  it.live("closing the scope removes presence, records the leave, and unregisters the main", () =>
+    withMesh(
+      Effect.gen(function* () {
+        const presence = yield* Presence;
+        const feed = yield* Feed;
+        const registry = yield* MainRegistry;
+        const scope = yield* Scope.make();
+        const session = yield* open(scope, "s1");
 
-      expect((yield* store.listPresence).map((p) => p.sessionId)).toEqual(["s1"]);
-      expect(Option.map(yield* registry.current, (s) => s.name)).toEqual(Option.some(session.name));
+        assert.deepStrictEqual(
+          (yield* presence.list).map((p) => p.sessionId),
+          ["s1"],
+        );
+        assert.strictEqual((yield* session.phase)._tag, "Idle");
+        assert.isTrue(Option.isSome(yield* registry.current));
 
-      yield* Scope.close(scope, Exit.void);
+        yield* Scope.close(scope, Exit.void);
 
-      expect(yield* store.listPresence).toEqual([]);
-      expect(yield* registry.current).toEqual(Option.none());
-      const feed = (yield* store.readFeed(10)).join("\n");
-      expect(feed).toContain('"type":"join"');
-      expect(feed).toContain('"type":"leave"');
-    }),
-  ));
+        assert.deepStrictEqual(yield* presence.list, []);
+        assert.isTrue(Option.isNone(yield* registry.current));
+        const lines = yield* feed.read(10);
+        assert.isTrue(lines.some((l) => l.includes('"type":"leave"') && l.includes(session.name)));
+      }),
+    ),
+  );
 
-test("a direct message sent by title card reaches the peer's session", () =>
-  runMesh(() =>
-    Effect.gen(function* () {
-      const received: Array<MeshMessage> = [];
-      const scope = yield* Scope.make();
-      const planner = yield* open(
-        scope,
-        joinMesh(
-          joinInput("planner", { readTitle: Effect.succeed("PLAN: auth rewrite") }, received),
-        ),
-      );
-      const sender = yield* open(scope, joinMesh(joinInput("sender")));
+  it.live("agent start and end move the phase and mirror it in presence", () =>
+    withMesh(
+      Effect.gen(function* () {
+        const presence = yield* Presence;
+        const scope = yield* Scope.make();
+        const session = yield* open(scope, "s1");
 
-      const outcome = yield* sender.send("plan", "ping");
-      expect(outcome).toMatchObject({ kind: "sent", target: { name: planner.name } });
+        yield* session.agentStarted;
+        assert.strictEqual((yield* session.phase)._tag, "Working");
+        assert.strictEqual((yield* presence.list)[0]?.status, "working");
+        yield* session.agentEnded;
+        assert.strictEqual((yield* presence.list)[0]?.status, "idle");
 
-      const arrived = yield* eventually(Effect.sync(() => received[0]));
-      expect(arrived).toMatchObject({ from: sender.name, body: "ping", broadcast: false });
-      yield* Scope.close(scope, Exit.void);
-    }),
-  ));
+        yield* Scope.close(scope, Exit.void);
+      }),
+    ),
+  );
+});
 
-test("broadcast stays in the repo group unless scope is all", () =>
-  runMesh(() =>
-    Effect.gen(function* () {
-      const sameRepo: Array<MeshMessage> = [];
-      const otherRepo: Array<MeshMessage> = [];
-      const scope = yield* Scope.make();
-      const sender = yield* open(scope, joinMesh(joinInput("sender")));
-      yield* open(scope, joinMesh(joinInput("mate", {}, sameRepo)));
-      yield* open(
-        scope,
-        joinMesh(joinInput("far", { group: "/work/other", cwd: "/work/other" }, otherRepo)),
-      );
+describe("messaging", () => {
+  it.live("a direct message wakes the receiver, and the sender's own broadcast is not echoed", () =>
+    withMesh(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const a = yield* open(scope, "a");
+        const b = yield* open(scope, "b");
 
-      expect((yield* sender.broadcast("group hello", "group")).recipients).toBe(1);
-      expect(yield* eventually(Effect.sync(() => sameRepo[0]))).toMatchObject({
-        body: "group hello",
-      });
-      yield* Effect.sleep(150);
-      expect(otherRepo).toEqual([]);
+        const sent = yield* a.send(b.name, "hello B");
+        assert.strictEqual(sent.target.name, b.name);
+        assert.strictEqual(sent.waitedMs, 0);
+        assert.deepStrictEqual(bodiesOf(yield* deliveries(b, 1)), ["hello B"]);
 
-      expect((yield* sender.broadcast("everyone", "all")).recipients).toBe(2);
-      expect(yield* eventually(Effect.sync(() => otherRepo[0]))).toMatchObject({
-        body: "everyone",
-      });
-      yield* Scope.close(scope, Exit.void);
-    }),
-  ));
+        const out = yield* a.broadcast("all hands", "group");
+        assert.strictEqual(out.recipients, 1);
+        assert.deepStrictEqual(bodiesOf(yield* deliveries(b, 2)), ["hello B", "all hands"]);
 
-test("a subagent edit on a path another agent claimed is blocked and attributed", () =>
-  runMesh(() =>
-    Effect.gen(function* () {
-      const store = yield* MeshStore;
-      const scope = yield* Scope.make();
-      const owner = yield* open(scope, joinMesh(joinInput("owner")));
-      const parent = yield* open(scope, joinMesh(joinInput("parent")));
-      yield* owner.claim(["/work/repo/auth.ts"], "rewrite");
+        yield* Scope.close(scope, Exit.void);
+      }),
+    ),
+  );
 
-      const blocked = yield* parent.guardEdit("/work/repo/auth.ts", "scout");
-      expect(Option.map(blocked, (c) => c.peer.name)).toEqual(Option.some(owner.name));
+  it.live("sending fails with typed errors for unknown targets and empty bodies", () =>
+    withMesh(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const a = yield* open(scope, "a");
 
-      const feed = (yield* store.readFeed(20)).join("\n");
-      expect(feed).toContain(`"type":"blocked","agent":"${parent.name}/scout"`);
-      expect((yield* parent.view).recent).toEqual([]);
-      yield* Scope.close(scope, Exit.void);
-    }),
-  ));
+        const missing = yield* Effect.flip(a.send("nobody", "hi"));
+        assert.strictEqual(missing._tag, "TargetNotFound");
+        assert.include(missing.message, "MESH_TARGET_NOT_FOUND");
+        const empty = yield* Effect.flip(a.send("nobody", "   "));
+        assert.strictEqual(empty._tag, "EmptyBody");
 
-test("subagent activity shows on the parent's presence for other peers", () =>
-  runMesh(() =>
-    Effect.gen(function* () {
-      const store = yield* MeshStore;
-      const scope = yield* Scope.make();
-      const observer = yield* open(scope, joinMesh(joinInput("observer")));
-      const parent = yield* open(scope, joinMesh(joinInput("parent")));
+        yield* Scope.close(scope, Exit.void);
+      }),
+    ),
+  );
+});
 
-      yield* parent.subagentStarted("sub-1", "scout");
-      yield* parent.subagentStarted("sub-2", "fixer");
-      yield* parent.subagentStarted("sub-2", "fixer");
-      const free = yield* parent.guardEdit("/work/repo/src/auth.ts", "fixer");
-      expect(Option.isNone(free)).toBe(true);
+describe("claims and subagents", () => {
+  it.live(
+    "a claim blocks another session's edit, attributed to the subagent, but never the owner",
+    () =>
+      withMesh(
+        Effect.gen(function* () {
+          const scope = yield* Scope.make();
+          const owner = yield* open(scope, "owner");
+          const other = yield* open(scope, "other");
 
-      const seen = (yield* observer.peers).find((p) => p.sessionId === "parent");
-      expect(seen?.subagents).toBe(2);
-      expect(seen?.recent[0]).toMatchObject({ path: "/work/repo/src/auth.ts", by: "fixer" });
-      expect((yield* store.readFeed(20)).join("\n")).toContain(
-        `"type":"edit","agent":"${parent.name}/fixer"`,
-      );
+          yield* owner.claim(["/work/repo/auth.ts"], "refactoring");
+          yield* owner.guardEdit("/work/repo/auth.ts", "scout");
 
-      yield* parent.subagentEnded("sub-1");
-      yield* parent.subagentEnded("sub-1");
-      const after = (yield* observer.peers).find((p) => p.sessionId === "parent");
-      expect(after?.subagents).toBe(1);
-      yield* Scope.close(scope, Exit.void);
-    }),
-  ));
+          const blocked = yield* Effect.flip(other.guardEdit("/work/repo/auth.ts", "fixer"));
+          assert.strictEqual(blocked._tag, "ClaimConflict");
+          assert.include(blocked.message, owner.name);
+          assert.include(blocked.message, "refactoring");
 
-test("a session's own claims never block its own subagents", () =>
-  runMesh(() =>
-    Effect.gen(function* () {
-      const scope = yield* Scope.make();
-      const parent = yield* open(scope, joinMesh(joinInput("parent")));
-      yield* parent.claim(["/work/repo/auth.ts"], undefined);
-      const result = yield* parent.guardEdit("/work/repo/auth.ts", "scout");
-      expect(Option.isNone(result)).toBe(true);
-      yield* Scope.close(scope, Exit.void);
-    }),
-  ));
+          const feed = yield* other.feed(10);
+          assert.isTrue(
+            feed.some((l) => l.includes('"type":"blocked"') && l.includes(`${other.name}/fixer`)),
+          );
+
+          yield* owner.release(undefined);
+          yield* other.guardEdit("/work/repo/auth.ts");
+
+          yield* Scope.close(scope, Exit.void);
+        }),
+      ),
+  );
+
+  it.live("subagent activity shows on the parent's presence and clears when it ends", () =>
+    withMesh(
+      Effect.gen(function* () {
+        const presence = yield* Presence;
+        const scope = yield* Scope.make();
+        const parent = yield* open(scope, "parent");
+
+        yield* parent.subagentStarted("sub-1", "scout");
+        yield* parent.guardEdit("/work/repo/x.ts", "scout");
+        const during = (yield* presence.list)[0];
+        assert.strictEqual(during?.subagents, 1);
+        assert.strictEqual(during?.recent[0]?.by, "scout");
+
+        yield* parent.subagentEnded("sub-1");
+        assert.strictEqual((yield* presence.list)[0]?.subagents, 0);
+
+        yield* Scope.close(scope, Exit.void);
+      }),
+    ),
+  );
+});

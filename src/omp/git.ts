@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from "node:path";
 import { Effect } from "effect";
-import { repoGroup } from "./peers.ts";
+import { repoGroup } from "../domain/peers.ts";
 
 export interface RepoInfo {
   readonly branch: string | undefined;

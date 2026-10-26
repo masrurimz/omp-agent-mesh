@@ -1,6 +1,9 @@
-import { displayPath } from "./paths.ts";
+import { displayPath, folderName } from "./paths.ts";
 import type { Peer } from "./peer.ts";
-import { effectiveGroup, folderName } from "./peers.ts";
+import { effectiveGroup } from "./peers.ts";
+
+export const formatStatus = (name: string, peerCount: number, unread: number): string =>
+  `mesh: ${name} (${peerCount} peer${peerCount === 1 ? "" : "s"})${unread > 0 ? ` ●${unread}` : ""}`;
 
 export const describePeer = (peer: Peer): string => {
   const head = peer.title ? `"${peer.title}" — @${peer.name}` : `@${peer.name}`;
