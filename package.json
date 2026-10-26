@@ -1,7 +1,7 @@
 {
   "name": "omp-agent-mesh",
-  "version": "0.2.0",
-  "description": "omp extension that lets separate omp sessions see, message, and coordinate with each other. Own mesh engine: presence, waking messages, throttled sends, file claims. Subagents stay on omp IRC.",
+  "version": "0.3.0",
+  "description": "omp extension that lets separate omp sessions see, message, and coordinate with each other. Own Effect-based mesh engine: repo groups, presence, waking messages, throttled sends, file claims, subagent attribution.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -20,6 +20,7 @@
   "dependencies": {
     "@effect/platform-bun": "4.0.6",
     "effect": "4.0.6",
+    "human-id": "4.2.2",
     "typebox": "1.4.3"
   },
   "devDependencies": {

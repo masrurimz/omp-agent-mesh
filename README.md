@@ -2,11 +2,17 @@
 
 An [omp](https://omp.sh) extension that lets **separate omp sessions** see each other, message each other, and avoid stepping on each other's work.
 
-Each main session joins a mesh on startup: it can list live peers, send messages that wake the receiver mid-run, broadcast, claim files so other agents' edits to them are blocked, and leave a status note. Subagent sessions stay off the mesh and keep using omp's built-in IRC (`agent://`).
+Each main session joins a mesh on startup: it can list live peers, send messages that wake the receiver mid-run, broadcast, claim files so other agents' edits to them are blocked, and leave a status note. Subagent sessions never join as peers and get no `mesh` tool, but they are visible and accountable: their edits respect other agents' claims, and the parent's presence shows how many subagents are running and what they last edited.
 
 There is no daemon and no server. Agents coordinate through files under `~/.omp/agent/mesh/` (presence, inboxes, feed), maintained by the extension inside each omp process.
 
-History: v0.1 wrapped pi-messenger. v0.2 is our own engine, written after the wrapper accumulated one fix too many (subagent gating, path normalization, and neutralizing an upstream per-session message budget). Messages now arrive with `aside` delivery, so they land between steps without interrupting a running tool batch, and sends are throttled instead of capped.
+History: v0.1 wrapped pi-messenger. v0.2 was our own imperative engine. v0.3 rebuilds it on Effect 4 (typed store, per-session scope, Schema at every file boundary) and adds repo groups, title addressing, and subagent attribution.
+
+## Concepts
+
+- **Repo group.** Sessions in the same git repository (including its worktrees) form a group. `peers` lists your group first, `broadcast` defaults to it, and the startup brief only names group members. `peers` with `all: true` and `broadcast` with `scope: "all"` reach other repos.
+- **Title addressing.** `send` accepts an agent handle (`GoldXenon`), a title card (the `PLAN` in a session titled `PLAN: auth rewrite`), or a substring of a title. Ambiguous matches are rejected with the candidate handles.
+- **Subagent attribution.** A subagent's `edit`/`write` is checked against other agents' claims and blocked like any peer's. Allowed edits are recorded on the parent's presence (`subagents` running count, `recent` edits labelled with the subagent) and in the feed as `<Parent>/<subagent>`. Peers render it as `@GoldXenon — repo — working — 3 subagents — last edit src/auth.ts (scout)`.
 
 ## Install
 
@@ -45,24 +51,30 @@ Agents only coordinate if they are told to. Add something like this to your glob
 - Ports: before binding, check the port is free (`ss -ltn`). If a server fails on a taken port, pick another. Post the port in your note.
 - Heavy shared work (docker, e2e, migrations, full builds): if a peer's status shows the same work, message them with `mesh` action `send` and wait instead of running in parallel.
 - Before editing files outside your own worktree, claim them with `mesh` action `claim`. Release with action `release` when done. Edits to files another agent claimed are blocked automatically.
-- If your change affects a peer's work (API, schema, shared config), message them.
+- If your change affects a peer's work (API, schema, shared config), message them. `broadcast` defaults to your repo group; pass `scope: "all"` for every agent on the machine. `send` accepts a handle or a title card such as `PLAN`.
 ```
 
 ## How it works
 
-| File              | Job                                                                                                                                                                                                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/index.ts`    | The omp entry point and the engine: registers the `mesh` tool, joins on `session_start` (main sessions under a mesh root only), watches the inbox, delivers messages, blocks edits to claimed files, and bridges omp callbacks to the Effect runtime for registry reads. |
-| `src/store.ts`    | Plain filesystem state: presence write/read, liveness, dead-peer reaping, inbox append, feed, claim conflict lookup, name generation, and the send `Throttle` (token bucket: burst 5, then 1 per 20s, delayed and never rejected).                                       |
-| `src/registry.ts` | An Effect service that reads presence files and decodes them with Schema at the boundary. Used for the startup brief and the `peers` action.                                                                                                                             |
-| `src/peer.ts`     | The `Peer` and `Reservation` Schemas: the shape of a presence file.                                                                                                                                                                                                      |
-| `src/paths.ts`    | Path rules: relative paths are absolutized against the session cwd; scheme URIs (`xd://`, `skill://`) are left alone; directory claims match by prefix.                                                                                                                  |
-| `src/brief.ts`    | Formats the startup peer summary. Pure function.                                                                                                                                                                                                                         |
-| `src/runtime.ts`  | One `ManagedRuntime` per session binding; Effect logs go to omp's logger.                                                                                                                                                                                                |
+| File                                             | Job                                                                                                                                                           |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`                                   | The omp entry point. Thin: registers the `mesh` tool and lifecycle hooks, and calls `runtime.runPromise` at each callback. Failures are logged, never thrown. |
+| `src/session.ts`                                 | `joinMesh`: builds one session inside a `Scope`. State lives in a `Ref`; an inbox watcher merged with a 5s heartbeat runs as a fiber in that scope.           |
+| `src/mesh-store.ts`                              | `MeshStore` service over Effect's `FileSystem`: presence, inbox, feed IO. Everything is Schema-decoded at the boundary; failures are `MeshIoError`.           |
+| `src/main-registry.ts`                           | `MainRegistry` service: the process-level link from subagent sessions to their parent main session.                                                           |
+| `src/throttle.ts`                                | Token-bucket throttle on `Ref` and `Clock` (burst 5, then 1 per 20s). It delays and never rejects, so it runs under `TestClock`.                              |
+| `src/git.ts`                                     | Git lookups as Effects: branch and repo group, with a fallback to the cwd when git fails.                                                                     |
+| `src/config.ts`                                  | Reads `~/.omp/agent/mesh.json` with Schema and matches cwd against the roots.                                                                                 |
+| `src/host.ts`                                    | Schema readers for omp host fields the pinned pi types lack (`ctx.agent`, `pi.logger`), so there are no casts.                                                |
+| `src/runtime.ts`                                 | One `ManagedRuntime` per process; Effect logs go to omp's logger.                                                                                             |
+| `src/peer.ts`, `src/message.ts`, `src/errors.ts` | The `Peer`, `MeshMessage`, and `FeedEvent` Schemas and the tagged `MeshIoError`.                                                                              |
+| `src/peers.ts`, `src/paths.ts`, `src/brief.ts`   | Pure functions: target resolution, group and claim rules, path rules, peer formatting.                                                                        |
 
-A new session's first turn contains a hidden summary (`Mesh peers online now:` plus one line per agent). Direct messages are delivered with `aside` and start a turn when the receiver is idle; broadcasts are passive and never wake anyone.
+**Cleanup guarantee.** `session_start` creates a `Scope` and runs `joinMesh` in it. Finalizers run in reverse order when the scope closes (`leave` action or `session_shutdown`): the heartbeat/watch fiber is interrupted, the session is unregistered from `MainRegistry`, then the leave event is appended and the presence file removed.
 
-Effect is used where there is IO with failure modes worth typing (presence reads). The store is plain filesystem code; the throttle and formatter are pure.
+**Subagent linkage.** omp reuses the extension factory for every session in the process (`ctx.agent.kind === "sub"` identifies subagents) and keeps module-level state shared. The runtime and `MainRegistry` therefore live at module level. A subagent session finds its parent through `MainRegistry.current`. This assumes one main session per process, which holds for omp's TUI and print modes. In-process subagents running in an isolated worktree have a different cwd, so claims made with other absolute paths do not match their relative edits.
+
+A new session's first turn contains a hidden summary of peers in its repo. Direct messages are delivered with `aside` and start a turn when the receiver is idle; broadcasts are passive and never wake anyone.
 
 ## Deferred follow-ups
 
@@ -84,7 +96,7 @@ bun run smoke       # real omp processes; needs a configured model provider
 bun run check       # all of the above except smoke, in order
 ```
 
-`bun run smoke` starts real omp sessions (CommandCode DeepSeek) in `~/work/labs/mesh-test-{a,b}` and checks: peers see each other, a message wakes a busy agent and gets an ACK, a claimed file blocks another agent's edit, a fresh agent's startup brief names its peers, subagents stay off the mesh, and sends are throttled rather than budget-rejected.
+`bun run smoke` recreates `~/work/labs/mesh-test-{a,b,c}` (a git repo, a worktree of it, and a separate repo), starts real omp sessions (CommandCode DeepSeek), and asserts on the feed, presence, and inbox files rather than on model narration. Checks: peers see each other, a message wakes a busy agent and gets an ACK, a claimed file blocks another agent's edit, a fresh agent's startup brief names its peers, subagents stay off the mesh, sends are throttled rather than budget-rejected, broadcast stays in the repo group by default, `scope: "all"` reaches the other repo, a subagent's edit to a claimed file is blocked and attributed as `<Parent>/<subagent>`, and the parent's presence shows its running subagent count.
 
 Type checking is `bun check`; the language server is [tsrs](https://github.com/oxc-project/tsrs), pinned as a devDependency. There is deliberately no `typescript` package: both tools bundle TypeScript's lib files. Host API types come from `@earendil-works/pi-coding-agent` as a devDependency; omp rewrites those specifiers to its own packages at load time.
 
