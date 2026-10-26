@@ -1,7 +1,8 @@
-import { Option, Schema } from "effect";
-
-// The pinned upstream pi types predate parts of the omp host surface (ctx.agent,
-// pi.logger). These schemas read them at runtime instead of casting.
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { Option, Predicate, Schema } from "effect";
 
 export type AgentRole =
   | { readonly kind: "main" }
@@ -10,31 +11,35 @@ export type AgentRole =
 const HostContext = Schema.Struct({
   agent: Schema.optional(
     Schema.Struct({
-      kind: Schema.Literals(["main", "sub"]),
       id: Schema.optional(Schema.String),
+      kind: Schema.Literals(["main", "sub"]),
       name: Schema.optional(Schema.String),
-    }),
+    })
   ),
 });
 
 const decodeContext = Schema.decodeUnknownOption(HostContext);
 
-export const agentOf = (ctx: unknown): AgentRole => {
+export const agentOf = (ctx: ExtensionContext): AgentRole => {
   const agent = Option.getOrUndefined(decodeContext(ctx))?.agent;
-  if (agent?.kind !== "sub") return { kind: "main" };
-  return { kind: "sub", label: agent.id || agent.name || "sub" };
+
+  if (agent?.kind !== "sub") {
+    return { kind: "main" };
+  }
+
+  return { kind: "sub", label: agent.id ?? agent.name ?? "sub" };
 };
 
 export interface HostLogger {
   readonly warn: (message: string) => void;
 }
 
-const isHostLogger = (u: unknown): u is HostLogger =>
-  typeof u === "object" && u !== null && "warn" in u && typeof u.warn === "function";
+const isHostLogger = (value: unknown): value is HostLogger =>
+  Predicate.hasProperty(value, "warn") && Predicate.isFunction(value.warn);
 
 const decodeHost = Schema.decodeUnknownOption(
-  Schema.Struct({ logger: Schema.optional(Schema.declare(isHostLogger)) }),
+  Schema.Struct({ logger: Schema.optional(Schema.declare(isHostLogger)) })
 );
 
-export const hostLogger = (pi: unknown): HostLogger | undefined =>
+export const hostLogger = (pi: ExtensionAPI): HostLogger | undefined =>
   Option.getOrUndefined(decodeHost(pi))?.logger;

@@ -1,37 +1,74 @@
+// @effect-diagnostics nodeBuiltinImport:off asyncFunction:off globalConsole:off globalTimers:off globalDate:off -- Black-box smoke over real omp processes: node:fs, Bun subprocesses, wall-clock polling, and console reporting are the right tools at this boundary, so the Effect-native diagnostics are off here.
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+
 import { Option, Schema } from "effect";
-import { FeedEvent } from "../src/domain/message.ts";
-import { Peer } from "../src/domain/peer.ts";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+
+import { FeedEventSchema } from "../src/domain/message.ts";
+import { PeerSchema } from "../src/domain/peer.ts";
+import type { Peer } from "../src/domain/peer.ts";
 
 const root = `${process.env.HOME}/work/labs`;
+
 const dirA = `${root}/mesh-test-a`;
+
 const dirB = `${root}/mesh-test-b`;
+
 const dirC = `${root}/mesh-test-c`;
 
-const git = (cwd: string, ...args: Array<string>) => {
+const git = (cwd: string, ...args: string[]) => {
   const result = Bun.spawnSync(
-    ["git", "-c", "user.name=smoke", "-c", "user.email=smoke@example.com", ...args],
-    { cwd },
+    [
+      "git",
+      "-c",
+      "user.name=smoke",
+      "-c",
+      "user.email=smoke@example.com",
+      ...args,
+    ],
+    { cwd }
   );
-  if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
+
+  if (result.exitCode !== 0) {
+    throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
+  }
 };
 
-// a and b share one repo (b is a worktree of a), c is a separate repo: group scoping needs both cases.
-for (const dir of [dirA, dirB, dirC]) rmSync(dir, { recursive: true, force: true });
+for (const dir of [dirA, dirB, dirC]) {
+  rmSync(dir, { force: true, recursive: true });
+}
+
 mkdirSync(dirA, { recursive: true });
+
 mkdirSync(dirC, { recursive: true });
+
 git(dirA, "init", "-q");
+
 writeFileSync(`${dirA}/shared.txt`, "shared file for claim smoke test\n");
+
 writeFileSync(`${dirA}/subedit.txt`, "file a subagent may edit\n");
+
 git(dirA, "add", ".");
+
 git(dirA, "commit", "-q", "-m", "init");
+
 git(dirA, "worktree", "prune");
+
 git(dirA, "worktree", "add", "-q", "-B", "smoke-b", dirB);
+
 git(dirC, "init", "-q");
 
 const meshBase = `${process.env.HOME}/.omp/agent/mesh`;
+
 const feedFile = `${meshBase}/feed.jsonl`;
+
 const agentsDirPath = `${meshBase}/agents`;
+
 const inboxDirPath = `${meshBase}/inbox`;
 
 interface RunResult {
@@ -41,11 +78,11 @@ interface RunResult {
 
 const MODEL = "commandcode/deepseek/deepseek-v4-flash";
 
-const runOmp = (
+const runOmp = async (
   cwd: string,
   prompt: string,
   timeoutMs = 420_000,
-  saveSession = false,
+  saveSession = false
 ): Promise<RunResult> => {
   const proc = Bun.spawn(
     [
@@ -58,53 +95,113 @@ const runOmp = (
       "yolo",
       prompt,
     ],
-    { cwd, stdout: "pipe", stderr: "pipe" },
+    { cwd, stderr: "pipe", stdout: "pipe" }
   );
-  const timer = setTimeout(() => proc.kill(), timeoutMs);
-  return (async () => {
-    const [out, err, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    clearTimeout(timer);
-    return { out: `${out}\n${err}`, code };
-  })();
+
+  const timer = setTimeout(() => {
+    proc.kill();
+  }, timeoutMs);
+
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  clearTimeout(timer);
+
+  return { code, out: `${out}\n${err}` };
 };
 
 const ownName = (out: string): string | undefined =>
-  /You are (\w+)\b(?: \(| in |\.)/.exec(out)?.[1];
+  /You are (?<name>\w+)\b(?: \(| in |\.)/u.exec(out)?.groups?.name;
 
-const verdicts: Array<[string, boolean, string]> = [];
+const verdicts: [string, boolean, string][] = [];
+
 const check = (label: string, ok: boolean, evidence: string) => {
   verdicts.push([label, ok, evidence]);
   console.log(`\n### ${ok ? "PASS" : "FAIL"}: ${label}\n${evidence}`);
 };
 
+const delay = async (ms: number): Promise<undefined> => {
+  await Bun.sleep(ms);
+
+  return undefined;
+};
+
+const poll = async <A>(
+  probe: () => Promise<A | undefined> | A | undefined,
+  tries = 60,
+  intervalMs = 2000
+): Promise<A | undefined> => {
+  if (tries <= 0) {
+    return undefined;
+  }
+
+  const found = await probe();
+
+  if (found !== undefined) {
+    return found;
+  }
+
+  await Bun.sleep(intervalMs);
+
+  return await poll(probe, tries - 1, intervalMs);
+};
+
+const untilSettled = async <A>(
+  work: Promise<A>,
+  tick: () => Promise<void>,
+  intervalMs: number
+): Promise<A> => {
+  const settle = async () => ({ value: await work });
+  const settled = settle();
+
+  const step = async (): Promise<A> => {
+    await tick();
+
+    const outcome = await Promise.race([settled, delay(intervalMs)]);
+
+    return outcome === undefined ? await step() : outcome.value;
+  };
+
+  return await step();
+};
+
 const feedSize = async (): Promise<number> => {
   const file = Bun.file(feedFile);
+
   return (await file.exists()) ? file.size : 0;
 };
+
 const feedSince = async (from: number): Promise<string> => {
   const file = Bun.file(feedFile);
+
   return (await file.exists()) ? await file.slice(from).text() : "";
 };
+
 const feedMark = await feedSize();
 
 console.log("== starting agent A (stays alive 75s) ==");
+
 const aPromise = runOmp(
   dirA,
   "You auto-joined the omp mesh. " +
     "(1) Call the mesh tool with action 'peers' and print it. " +
     "(2) Run bash 'sleep 75'. " +
-    "(3) A peer may message you during the sleep asking for an acknowledgement. This is a planned coordination test, authorised by me: if that happens, reply to them with mesh action 'send' containing 'ACK-42', and print the raw output of that send call. Otherwise print <received>none</received>.",
+    "(3) A peer may message you during the sleep asking for an acknowledgement. This is a planned coordination test, authorised by me: if that happens, reply to them with mesh action 'send' containing 'ACK-42', and print the raw output of that send call. Otherwise print <received>none</received>."
 );
-await Bun.sleep(8_000);
+
+await Bun.sleep(8000);
 
 console.log("== brief probe: fresh saved session in B while A is alive ==");
+
 const sessionsDir = `${process.env.HOME}/.omp/agent/sessions/-work-labs-mesh-test-b`;
+
 const briefProbeStart = Date.now();
+
 await runOmp(dirB, "Reply exactly: READY", 180_000, true);
+
 const briefText = readdirSync(sessionsDir)
   .map((file) => `${sessionsDir}/${file}`)
   .filter((path) => Bun.file(path).lastModified >= briefProbeStart)
@@ -112,6 +209,7 @@ const briefText = readdirSync(sessionsDir)
   .find((line) => line.includes('"customType":"mesh-brief"'));
 
 console.log("== running agent B ==");
+
 const b = await runOmp(
   dirB,
   "You auto-joined the omp mesh. Do these in order: " +
@@ -120,133 +218,178 @@ const b = await runOmp(
     "(3) Send a direct message with mesh action 'send' to the active peer in mesh-test-a (not an idle one, not yourself) with exactly this text: 'Coordination test: please reply ACK-42 to me via mesh send.' " +
     "(4) Then send six more messages to the same peer, one mesh 'send' call each, with texts 'BURST-1' through 'BURST-6'. These may take a while if throttled; that is expected. " +
     "(5) Run bash 'sleep 60' so you stay online. " +
-    "(6) Print the raw outputs of steps 2-4. If a message from a peer arrived during this session, quote it verbatim between <received> and </received> tags; otherwise print <received>none</received>.",
+    "(6) Print the raw outputs of steps 2-4. If a message from a peer arrived during this session, quote it verbatim between <received> and </received> tags; otherwise print <received>none</received>."
 );
-console.log(b.out.slice(0, 1_500));
-console.log(b.out.slice(-3_000));
+
+console.log(b.out.slice(0, 1500));
+
+console.log(b.out.slice(-3000));
 
 const a = await aPromise;
+
 console.log("\n== agent A finished ==");
-console.log(a.out.slice(-3_000));
+
+console.log(a.out.slice(-3000));
 
 const newFeed = await feedSince(feedMark);
-const ackEvent = /"agent":"(\w+)","target":"(\w+)","preview":"ACK-42"/.exec(newFeed);
-const aName = ackEvent?.[1] ?? ownName(a.out);
-const bName = ackEvent?.[2] ?? ownName(b.out);
+
+const ackEvent = newFeed
+  .split("\n")
+  .map((line) =>
+    Schema.decodeUnknownOption(Schema.fromJsonString(FeedEventSchema))(line)
+  )
+  .flatMap((event) => (Option.isSome(event) ? [event.value] : []))
+  .find((event) => event.type === "message" && event.preview === "ACK-42");
+
+const aName = ackEvent?.agent ?? ownName(a.out);
+
+const bName = ackEvent?.target ?? ownName(b.out);
 
 check(
   "1. A and B see each other in peers",
-  Boolean(aName && b.out.includes(aName)),
-  `A=${aName} B=${bName}; B's output mentions A: ${aName ? b.out.includes(aName) : false}`,
+  aName !== undefined && b.out.includes(aName),
+  `A=${aName} B=${bName}; B's output mentions A: ${aName === undefined ? false : b.out.includes(aName)}`
 );
+
 check(
   "2. B's message woke A mid-run; A's ACK reached B",
   newFeed.includes('"preview":"ACK-42"') &&
-    Boolean(bName && newFeed.includes(`"target":"${bName}"`)),
+    bName !== undefined &&
+    newFeed.includes(`"target":"${bName}"`),
   `new feed message events: ${
     newFeed
       .split("\n")
       .filter((l) => l.includes('"message"'))
       .join(" ") || "none"
-  }`,
+  }`
 );
+
 check(
   "4. A fresh session in A's repo group gets a startup brief naming A (saved transcript)",
-  Boolean(aName && briefText?.includes(aName)),
-  `brief entry: ${briefText ? /"content":"([^"]{0,200})/.exec(briefText)?.[1] : "(none in transcript)"}`,
+  aName !== undefined && briefText?.includes(aName) === true,
+  `brief entry: ${briefText === undefined ? "(none in transcript)" : /"content":"(?<text>[^"]{0,200})/u.exec(briefText)?.groups?.text}`
 );
-const burstCount = (newFeed.match(/BURST-\d/g) ?? []).length;
+
+const burstCount = (newFeed.match(/BURST-\d/gu) ?? []).length;
+
 check(
   "6. Sends are throttled, never budget-rejected (7 sends from B all landed)",
   burstCount >= 6 && !b.out.includes("budget"),
-  `BURST previews in feed: ${burstCount}; B output mentions budget: ${b.out.includes("budget")}`,
+  `BURST previews in feed: ${burstCount}; B output mentions budget: ${b.out.includes("budget")}`
 );
 
 console.log("== running agent B2 (holds claim) ==");
+
 const b2Promise = runOmp(
   dirB,
   "You auto-joined the omp mesh. " +
     `(1) Call the mesh tool with action 'claim' for paths ['${dirA}/shared.txt'] with reason 'smoke test'. ` +
-    "(2) Run bash 'sleep 45'. (3) Print your claim output and your agent name from mesh 'peers'.",
+    "(2) Run bash 'sleep 45'. (3) Print your claim output and your agent name from mesh 'peers'."
 );
 
-const claimHeld = async (): Promise<boolean> => {
+const claimHeld = async (): Promise<true | undefined> => {
   const glob = new Bun.Glob("*.json");
-  for await (const name of glob.scan(agentsDirPath)) {
-    if ((await Bun.file(`${agentsDirPath}/${name}`).text()).includes("shared.txt")) return true;
-  }
-  return false;
+  const names = await Array.fromAsync(glob.scan(agentsDirPath));
+
+  const texts = await Promise.all(
+    names.map(async (name) => await Bun.file(`${agentsDirPath}/${name}`).text())
+  );
+
+  return texts.some((text) => text.includes("shared.txt")) ? true : undefined;
 };
-let held = false;
-for (let i = 0; i < 60 && !held; i++) {
-  held = await claimHeld();
-  if (!held) await Bun.sleep(2_000);
-}
+
+const held = (await poll(claimHeld)) === true;
+
 console.log(`claim visible in presence files: ${held}`);
 
 console.log("== running agent A2 (tries to edit the claimed file) ==");
+
 const a2 = await runOmp(
   dirA,
-  "Do not call the mesh tool at all. Use the edit tool to append the line 'A2 was here' to ./shared.txt. Then report exactly what happened, including any error or block message verbatim.",
+  "Do not call the mesh tool at all. Use the edit tool to append the line 'A2 was here' to ./shared.txt. Then report exactly what happened, including any error or block message verbatim."
 );
-console.log(a2.out.slice(-2_000));
+
+console.log(a2.out.slice(-2000));
+
 const b2 = await b2Promise;
-console.log(b2.out.slice(-1_500));
-const reserver = /Reserved by: (\w+)/.exec(a2.out)?.[1];
+
+console.log(b2.out.slice(-1500));
+
+const reserver = /Reserved by: (?<name>\w+)/u.exec(a2.out)?.groups?.name;
+
 check(
   "3. A's edit to a file claimed by B is blocked, naming B",
-  Boolean(reserver && b2.out.includes(reserver)),
-  `reserver named in block: ${reserver ?? "(none)"}; B2 output mentions it: ${reserver ? b2.out.includes(reserver) : false}`,
+  reserver !== undefined && b2.out.includes(reserver),
+  `reserver named in block: ${reserver ?? "(none)"}; B2 output mentions it: ${reserver === undefined ? false : b2.out.includes(reserver)}`
+);
+
+const decodePeer = Schema.decodeUnknownOption(
+  Schema.fromJsonString(PeerSchema)
+);
+
+const decodeFeedEvent = Schema.decodeUnknownOption(
+  Schema.fromJsonString(FeedEventSchema)
 );
 
 const presenceNames = async (): Promise<Set<string>> => {
-  const names = new Set<string>();
   const glob = new Bun.Glob("*.json");
-  for await (const file of glob.scan(agentsDirPath)) {
-    try {
-      const parsed = JSON.parse(await Bun.file(`${agentsDirPath}/${file}`).text()) as {
-        name?: string;
-      };
-      if (parsed.name) names.add(parsed.name);
-    } catch {}
-  }
-  return names;
+  const files = await Array.fromAsync(glob.scan(agentsDirPath));
+
+  const texts = await Promise.all(
+    files.map(async (file) => await Bun.file(`${agentsDirPath}/${file}`).text())
+  );
+
+  return new Set(
+    texts.flatMap((text) => {
+      const parsed = decodePeer(text);
+
+      return Option.isSome(parsed) ? [parsed.value.name] : [];
+    })
+  );
 };
 
 console.log("== running agent A3 (spawns a subagent) ==");
+
 const beforeA3 = await presenceNames();
-let a3Done = false;
-const a3Promise = runOmp(
-  dirA,
-  "Spawn exactly one scout subagent (task tool) to list the files in this directory, and wait for it to finish. " +
-    "Then call the mesh tool with action 'peers' and print the full output verbatim.",
-).then((r) => {
-  a3Done = true;
-  return r;
-});
+
 const seenDuringA3 = new Set<string>();
-while (!a3Done) {
-  for (const n of await presenceNames()) seenDuringA3.add(n);
-  if (!a3Done) await Bun.sleep(2_000);
-}
-const a3 = await a3Promise;
-console.log(a3.out.slice(-2_500));
-const a3Name = ownName(a3.out);
-const newAgents = [...seenDuringA3].filter((n) => !beforeA3.has(n) && n !== a3Name);
-check(
-  "5. Subagents stay off the mesh (no new presence entries during A3)",
-  Boolean(a3Name) && newAgents.length === 0,
-  `A3=${a3Name}; new agents registered during A3: ${newAgents.join(", ") || "none"}`,
+
+const a3 = await untilSettled(
+  runOmp(
+    dirA,
+    "Spawn exactly one scout subagent (task tool) to list the files in this directory, and wait for it to finish. " +
+      "Then call the mesh tool with action 'peers' and print the full output verbatim."
+  ),
+  async () => {
+    for (const n of await presenceNames()) {
+      seenDuringA3.add(n);
+    }
+  },
+  2000
 );
 
-const decodePeer = Schema.decodeUnknownOption(Schema.fromJsonString(Peer));
-const decodeFeedEvent = Schema.decodeUnknownOption(Schema.fromJsonString(FeedEvent));
+console.log(a3.out.slice(-2500));
 
-const readPresence = (): Array<Peer> =>
+const a3Name = ownName(a3.out);
+
+const newAgents = [...seenDuringA3].filter(
+  (n) => !beforeA3.has(n) && n !== a3Name
+);
+
+check(
+  "5. Subagents stay off the mesh (no new presence entries during A3)",
+  a3Name !== undefined && newAgents.length === 0,
+  `A3=${a3Name}; new agents registered during A3: ${newAgents.join(", ") || "none"}`
+);
+
+const readPresence = (): Peer[] =>
   readdirSync(agentsDirPath)
     .filter((file) => file.endsWith(".json"))
     .flatMap((file) => {
-      const parsed = decodePeer(readFileSync(`${agentsDirPath}/${file}`, "utf-8"));
+      const parsed = decodePeer(
+        readFileSync(`${agentsDirPath}/${file}`, "utf-8")
+      );
+
       return Option.isSome(parsed) ? [parsed.value] : [];
     });
 
@@ -258,115 +401,176 @@ const inboxText = (sessionId: string): string => {
   }
 };
 
-const waitFor = async <A>(probe: () => A | undefined, tries = 60): Promise<A | undefined> => {
-  for (let i = 0; i < tries; i++) {
-    const found = probe();
-    if (found !== undefined) return found;
-    await Bun.sleep(2_000);
-  }
-  return undefined;
-};
+const inDir = (peer: Peer, dir: string): boolean =>
+  peer.cwd.endsWith(dir.split("/").at(-1) ?? dir);
 
-const inDir = (peer: Peer, dir: string): boolean => peer.cwd.endsWith(dir.split("/").at(-1) ?? dir);
+console.log(
+  "== running broadcast scoping: A and C stay alive, B broadcasts =="
+);
 
-console.log("== running broadcast scoping: A and C stay alive, B broadcasts ==");
-const stayAlive = (dir: string) =>
-  runOmp(dir, "You auto-joined the omp mesh. Run bash 'sleep 80', then print DONE.");
+const stayAlive = async (dir: string) =>
+  await runOmp(
+    dir,
+    "You auto-joined the omp mesh. Run bash 'sleep 80', then print DONE."
+  );
+
 const aLive = stayAlive(dirA);
+
 const cLive = stayAlive(dirC);
-const live = await waitFor(() => {
+
+const live = await poll(() => {
   const rows = readPresence();
-  const a = rows.find((p) => inDir(p, dirA));
-  const c = rows.find((p) => inDir(p, dirC));
-  return a && c ? { a, c } : undefined;
+  const peerA = rows.find((p) => inDir(p, dirA));
+  const peerC = rows.find((p) => inDir(p, dirC));
+
+  return peerA && peerC ? { a: peerA, c: peerC } : undefined;
 });
+
 const b3 = await runOmp(
   dirB,
   "You auto-joined the omp mesh. " +
     "(1) Call the mesh tool with action 'broadcast' and body 'GROUP-PING', passing no scope argument. " +
     "(2) Call the mesh tool with action 'broadcast', body 'ALL-PING', scope 'all'. " +
-    "(3) Print the raw outputs of both calls.",
+    "(3) Print the raw outputs of both calls."
 );
-console.log(b3.out.slice(-1_500));
+
+console.log(b3.out.slice(-1500));
+
 const aInbox = live ? inboxText(live.a.sessionId) : "";
+
 const cInbox = live ? inboxText(live.c.sessionId) : "";
+
 check(
   "7. Broadcast defaults to the repo group (same-repo A gets it, other-repo C does not)",
-  Boolean(live) && aInbox.includes("GROUP-PING") && !cInbox.includes("GROUP-PING"),
-  `A inbox has GROUP-PING: ${aInbox.includes("GROUP-PING")}; C inbox has GROUP-PING: ${cInbox.includes("GROUP-PING")}`,
+  Boolean(live) &&
+    aInbox.includes("GROUP-PING") &&
+    !cInbox.includes("GROUP-PING"),
+  `A inbox has GROUP-PING: ${aInbox.includes("GROUP-PING")}; C inbox has GROUP-PING: ${cInbox.includes("GROUP-PING")}`
 );
+
 check(
   '8. Broadcast with scope "all" reaches the other repo',
   Boolean(live) && cInbox.includes("ALL-PING") && aInbox.includes("ALL-PING"),
-  `C inbox has ALL-PING: ${cInbox.includes("ALL-PING")}; A inbox has ALL-PING: ${aInbox.includes("ALL-PING")}`,
+  `C inbox has ALL-PING: ${cInbox.includes("ALL-PING")}; A inbox has ALL-PING: ${aInbox.includes("ALL-PING")}`
 );
+
 await Promise.all([aLive, cLive]);
 
-console.log("== running subagent attribution: B4 holds a claim, A4's subagent edits ==");
+console.log(
+  "== running subagent attribution: B4 holds a claim, A4's subagent edits =="
+);
+
 const sharedPath = `${dirA}/shared.txt`;
+
 const subeditPath = `${dirA}/subedit.txt`;
+
 const b4Promise = runOmp(
   dirB,
-  `You auto-joined the omp mesh. (1) Call the mesh tool with action 'claim' for paths ['${sharedPath}'] with reason 'subagent smoke'. (2) Run bash 'sleep 120'. (3) Print DONE.`,
+  `You auto-joined the omp mesh. (1) Call the mesh tool with action 'claim' for paths ['${sharedPath}'] with reason 'subagent smoke'. (2) Run bash 'sleep 120'. (3) Print DONE.`
 );
-const claimedByB4 = await waitFor(() =>
-  readPresence().some((p) => p.reservations.some((r) => r.pattern === sharedPath))
+
+const claimedByB4 = await poll(() =>
+  readPresence().some((p) =>
+    p.reservations.some((r) => r.pattern === sharedPath)
+  )
     ? true
-    : undefined,
+    : undefined
 );
+
 console.log(`claim visible in presence files: ${claimedByB4 === true}`);
 
 const namesBeforeA4 = new Set(readPresence().map((p) => p.name));
-let a4Done = false;
-const a4Promise = runOmp(
-  dirA,
-  "Spawn exactly one task subagent and wait for it to finish. Give it these instructions verbatim: " +
-    `"Step 1: use the edit tool to append the line 'SUB was here' to ${sharedPath}. If the edit is rejected or blocked, do not retry and do not work around it. ` +
-    `Step 2: run bash 'sleep 25'. Step 3: use the edit tool to append the line 'SUB ok' to ${subeditPath}. Then yield." ` +
-    "Do not edit any file yourself and do not call the mesh tool.",
-).then((r) => {
-  a4Done = true;
-  return r;
-});
-let parentName: string | undefined;
-let maxSubagents = 0;
-const attributedRecent = new Set<string>();
-while (!a4Done) {
-  const parent = readPresence().find((p) => inDir(p, dirA) && !namesBeforeA4.has(p.name));
-  if (parent) {
-    parentName = parent.name;
-    maxSubagents = Math.max(maxSubagents, parent.subagents);
-    for (const edit of parent.recent) attributedRecent.add(`${edit.path} by ${edit.by}`);
-  }
-  if (!a4Done) await Bun.sleep(1_000);
+
+interface Attribution {
+  attributedRecent: Set<string>;
+  maxSubagents: number;
+  parentName: string | undefined;
 }
-const a4 = await a4Promise;
-console.log(a4.out.slice(-2_000));
-const feedEvents = (await feedSince(feedMark)).split("\n").flatMap((line) => {
+
+const attribution: Attribution = {
+  attributedRecent: new Set<string>(),
+  maxSubagents: 0,
+  parentName: undefined,
+};
+
+const a4 = await untilSettled(
+  runOmp(
+    dirA,
+    "Spawn exactly one task subagent and wait for it to finish. Give it these instructions verbatim: " +
+      `"Step 1: use the edit tool to append the line 'SUB was here' to ${sharedPath}. If the edit is rejected or blocked, do not retry and do not work around it. ` +
+      `Step 2: run bash 'sleep 25'. Step 3: use the edit tool to append the line 'SUB ok' to ${subeditPath}. Then yield." ` +
+      "Do not edit any file yourself and do not call the mesh tool."
+  ),
+  async () => {
+    const parent = readPresence().find(
+      (p) => inDir(p, dirA) && !namesBeforeA4.has(p.name)
+    );
+
+    if (parent) {
+      attribution.parentName = parent.name;
+      attribution.maxSubagents = Math.max(
+        attribution.maxSubagents,
+        parent.subagents
+      );
+
+      for (const edit of parent.recent) {
+        attribution.attributedRecent.add(`${edit.path} by ${edit.by}`);
+      }
+    }
+
+    await Promise.resolve();
+  },
+  1000
+);
+
+const { attributedRecent, maxSubagents, parentName } = attribution;
+
+console.log(a4.out.slice(-2000));
+
+const feedText = await feedSince(feedMark);
+
+const feedEvents = feedText.split("\n").flatMap((line) => {
   const event = decodeFeedEvent(line);
+
   return Option.isSome(event) ? [event.value] : [];
 });
+
 const blockedEvent = feedEvents.find(
-  (e) => e.type === "blocked" && e.target === sharedPath && e.agent.startsWith(`${parentName}/`),
+  (e) =>
+    e.type === "blocked" &&
+    e.target === sharedPath &&
+    e.agent.startsWith(`${parentName}/`)
 );
+
 const sharedContent = await Bun.file(sharedPath).text();
+
 check(
   "9. A subagent's edit to a file claimed by another agent is blocked and attributed to Parent/subagent",
-  Boolean(parentName && blockedEvent) && !sharedContent.includes("SUB was here"),
-  `parent=${parentName}; blocked event agent=${blockedEvent?.agent ?? "(none)"}; shared.txt untouched: ${!sharedContent.includes("SUB was here")}`,
+  parentName !== undefined &&
+    blockedEvent !== undefined &&
+    !sharedContent.includes("SUB was here"),
+  `parent=${parentName}; blocked event agent=${blockedEvent?.agent ?? "(none)"}; shared.txt untouched: ${!sharedContent.includes("SUB was here")}`
 );
+
 const editEvent = feedEvents.find(
-  (e) => e.type === "edit" && e.target === subeditPath && e.agent.startsWith(`${parentName}/`),
+  (e) =>
+    e.type === "edit" &&
+    e.target === subeditPath &&
+    e.agent.startsWith(`${parentName}/`)
 );
+
 check(
   "10. Other sessions' presence shows the parent's running subagent count and attributed edit",
-  Boolean(parentName) && maxSubagents >= 1 && Boolean(editEvent),
-  `max subagents seen in parent presence: ${maxSubagents}; feed edit agent=${editEvent?.agent ?? "(none)"}; recent seen: ${[...attributedRecent].join("; ") || "none"}`,
+  parentName !== undefined && maxSubagents >= 1 && editEvent !== undefined,
+  `max subagents seen in parent presence: ${maxSubagents}; feed edit agent=${editEvent?.agent ?? "(none)"}; recent seen: ${[...attributedRecent].join("; ") || "none"}`
 );
+
 await b4Promise;
 
 const failed = verdicts.filter(([, ok]) => !ok);
+
 console.log(
-  `\n== smoke done: ${verdicts.length - failed.length}/${verdicts.length} checks passed ==`,
+  `\n== smoke done: ${verdicts.length - failed.length}/${verdicts.length} checks passed ==`
 );
+
 process.exit(failed.length > 0 ? 1 : 0);

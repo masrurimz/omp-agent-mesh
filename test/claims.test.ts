@@ -1,10 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Predicate, Schema } from "effect";
+
 import { Claims } from "../src/services/claims.ts";
 import { Presence } from "../src/services/presence.ts";
 import { peer, withMesh } from "./support.ts";
 
-const Id = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 9999 }));
+const Id = Schema.Int.check(Schema.isBetween({ maximum: 9999, minimum: 0 }));
 
 const claimedBy = (pattern: string) =>
   peer("holder", { name: "Holder", reservations: [{ pattern, since: 0 }] });
@@ -15,7 +16,7 @@ describe("claims", () => {
     { dir: Id, file: Id },
     ({ dir, file }) =>
       withMesh(
-        Effect.gen(function* () {
+        Effect.gen(function* directoryClaim() {
           const presence = yield* Presence;
           const claims = yield* Claims;
           yield* presence.ensureDir;
@@ -24,14 +25,16 @@ describe("claims", () => {
 
           const blocked = yield* Effect.flip(claims.guard("other", path));
           assert.strictEqual(blocked._tag, "ClaimConflict");
-          if (blocked._tag === "ClaimConflict") {
+
+          if (Predicate.isTagged(blocked, "ClaimConflict")) {
             assert.strictEqual(blocked.holder, "Holder");
             assert.strictEqual(blocked.path, path);
           }
+
           yield* claims.guard("holder", path);
           yield* claims.guard("other", `/w/${dir + 1}/sub/${file}.ts`);
-        }),
-      ),
+        })
+      )
   );
 
   it.effect.prop(
@@ -39,7 +42,7 @@ describe("claims", () => {
     { dir: Id, file: Id },
     ({ dir, file }) =>
       withMesh(
-        Effect.gen(function* () {
+        Effect.gen(function* fileClaim() {
           const presence = yield* Presence;
           const claims = yield* Claims;
           yield* presence.ensureDir;
@@ -51,7 +54,7 @@ describe("claims", () => {
           yield* claims.guard("holder", claimed);
           yield* claims.guard("other", `${claimed}x`);
           yield* claims.guard("other", `/w/${dir}/${file + 1}.ts`);
-        }),
-      ),
+        })
+      )
   );
 });

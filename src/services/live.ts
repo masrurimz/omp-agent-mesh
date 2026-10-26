@@ -1,4 +1,5 @@
 import { Layer } from "effect";
+
 import { Claims } from "./claims.ts";
 import { Feed } from "./feed.ts";
 import { Inbox } from "./inbox.ts";
@@ -11,7 +12,7 @@ const stores = Layer.mergeAll(
   Inbox.layer,
   Feed.layer,
   Throttle.layer,
-  MainRegistry.layer,
+  MainRegistry.layer
 );
 
 export const MeshServices = Claims.layer.pipe(Layer.provideMerge(stores));

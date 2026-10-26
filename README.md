@@ -56,17 +56,16 @@ Agents only coordinate if they are told to. Add something like this to your glob
 
 ## How it works
 
-| Path                                | Job                                                                                                                                                                                                                                                                                                                     |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/domain/errors.ts`              | One `Schema.TaggedError` per failure (`NotJoined`, `TargetNotFound`, `TargetAmbiguous`, `ClaimConflict`, `EmptyBody`, `InvalidInput`, `MeshIoError`). Each carries context and a `MESH_*` message with a fix hint.                                                                                                      |
-| `src/domain/*`                      | Schemas (`Peer`, `MeshMessage`, `FeedEvent`) and the pure rules: target resolution, groups, claim matching, paths, roots, reservations, peer formatting.                                                                                                                                                                |
-| `src/lifecycle/session-machine.ts`  | The session lifecycle as one XState machine (`joining`, `idle`, `working`, `departing`, `left`) run by `createEffectActor` inside the session scope. Declared `createEffectLogic` actors announce the join, persist the status to presence, and record the leave. Events the current state does not handle are ignored. |
-| `src/services/*`                    | `Context.Service` classes whose `make` captures dependencies: `MeshConfig`, `Presence`, `Inbox`, `Feed`, `Claims`, `Throttle`, `MainRegistry`, the per-session `SessionState` (live peer state and presence writes), and the scoped `MeshSession`. `live.ts` composes the stores into `MeshServices`.                   |
-| `src/contract/*`                    | The `mesh` tool as a Schema tagged union per action, plus `defineMeshTool`, which derives the omp tool parameters from the Schema and decodes input at the edge.                                                                                                                                                        |
-| `src/omp/index.ts`                  | The omp edge: registers the tool and hooks, and is the only place that calls `runtime.runPromise`. Failures are logged or returned as tool text, never thrown.                                                                                                                                                          |
-| `src/omp/mesh-tool.ts`              | The `mesh` tool handler: maps each action onto session methods.                                                                                                                                                                                                                                                         |
-| `src/omp/runtime.ts`                | The single process `ManagedRuntime`; Effect logs go to omp's logger.                                                                                                                                                                                                                                                    |
-| `src/omp/git.ts`, `src/omp/host.ts` | Git lookups as Effects, and Schema readers for host fields the pinned pi types lack (`ctx.agent`, `pi.logger`).                                                                                                                                                                                                         |
+| Path | Job |
+| --- | --- |
+| `src/domain/*` | One `Schema.TaggedError` per failure file (`not-joined.ts`, `target-not-found.ts`, `target-ambiguous.ts`, `claim-conflict.ts`, `empty-body.ts`, `invalid-input.ts`, `mesh-io-error.ts`), each carrying context and a `MESH_*` message with a fix hint. Also the schemas (`PeerSchema`, `MeshMessageSchema`, `FeedEventSchema`) and the pure rules: target resolution, groups, claim matching, paths, roots, reservations, peer formatting. |
+| `src/lifecycle/session-machine.ts` | The session lifecycle as one XState machine (`joining`, `idle`, `working`, `departing`, `left`) run by `createEffectActor` inside the session scope. Declared `createEffectLogic` actors announce the join, persist the status to presence, and record the leave. Events the current state does not handle are ignored. |
+| `src/services/*` | `Context.Service` classes whose `make` captures dependencies: `MeshConfig`, `Presence`, `Inbox`, `Feed`, `Claims`, `Throttle`, `MainRegistry`, the per-session `SessionState` (live peer state and presence writes), and the scoped `MeshSession`. `live.ts` composes the stores into `MeshServices`. |
+| `src/contract/*` | The `mesh` tool as a Schema tagged union per action, plus `defineMeshTool`, which derives the omp tool parameters from the Schema and decodes input at the edge. |
+| `src/omp/index.ts` | The omp edge: registers the tool and hooks, and is the only place that calls `runtime.runPromise`. Failures are logged or returned as tool text, never thrown. |
+| `src/omp/mesh-tool.ts` | The `mesh` tool handler: maps each action onto session methods. |
+| `src/omp/runtime.ts` | The single process `ManagedRuntime`; Effect logs go to omp's logger. |
+| `src/omp/git.ts`, `src/omp/host.ts` | Git lookups as Effects, and Schema readers for host fields the pinned pi types lack (`ctx.agent`, `pi.logger`). |
 
 **Typed errors.** Session methods fail with the tagged errors above; there are no result objects like `{ kind: "none" }`. Tool text derives from the error message, for example `MESH_TARGET_AMBIGUOUS: "auth" matches GoldXenon, RedOwl. Fix: send to one exact handle.`
 
@@ -92,7 +91,7 @@ Tracked as issues:
 ## Development
 
 ```sh
-bun run lint        # oxlint
+bun run lint        # oxlint (the fence: ultracite core, vendored anti-slop, rat-stack plugins)
 bun run fmt         # oxfmt --check
 bun run typecheck   # effect-tsrs diagnostics --strict
 bun run typecheck:fast # bun check --no-script --threads 4
@@ -102,6 +101,8 @@ bun run check       # all of the above except smoke, in order
 ```
 
 `bun run smoke` recreates `~/work/labs/mesh-test-{a,b,c}` (a git repo, a worktree of it, and a separate repo), starts real omp sessions (CommandCode DeepSeek), and asserts on the feed, presence, and inbox files rather than on model narration. Checks: peers see each other, a message wakes a busy agent and gets an ACK, a claimed file blocks another agent's edit, a fresh agent's startup brief names its peers, subagents stay off the mesh, sends are throttled rather than budget-rejected, broadcast stays in the repo group by default, `scope: "all"` reaches the other repo, a subagent's edit to a claimed file is blocked and attributed as `<Parent>/<subagent>`, and the parent's presence shows its running subagent count.
+
+The fence is ported from [rat-stack](https://github.com/joelhooks/rat-stack): see `AGENTS.md` for the rule list and `PROVENANCE.md` for credits. `prek run --all-files` runs the same gates as the commit hook. `.omp/extensions/vcs-policy.ts` blocks agent `git ... --no-verify` inside omp sessions.
 
 `bun run typecheck` runs strict Effect diagnostics ([`@yielded/effect-tsrs`](https://www.npmjs.com/package/@yielded/effect-tsrs)): floating effects and other Effect rule violations fail the gate. `typecheck:fast` is the plain `bun check` pass; its language server is [tsrs](https://github.com/oxc-project/tsrs), pinned as a devDependency. There is deliberately no `typescript` package: both tools bundle TypeScript's lib files. Host API types come from `@earendil-works/pi-coding-agent` as a devDependency; omp rewrites those specifiers to its own packages at load time.
 

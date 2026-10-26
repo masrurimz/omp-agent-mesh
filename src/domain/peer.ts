@@ -1,34 +1,38 @@
 import { Effect, Schema } from "effect";
 
-export const Reservation = Schema.Struct({
+export const ReservationSchema = Schema.Struct({
   pattern: Schema.String,
   reason: Schema.optional(Schema.String),
   since: Schema.Finite,
 });
 
-export const RecentEdit = Schema.Struct({
-  path: Schema.String,
-  by: Schema.String,
+export const RecentEditSchema = Schema.Struct({
   at: Schema.Finite,
+  by: Schema.String,
+  path: Schema.String,
 });
 
-export const Peer = Schema.Struct({
-  name: Schema.String,
-  pid: Schema.Int,
-  sessionId: Schema.String,
+export const PeerSchema = Schema.Struct({
+  branch: Schema.optional(Schema.String),
   cwd: Schema.String,
   group: Schema.optional(Schema.String),
-  title: Schema.optional(Schema.String),
-  branch: Schema.optional(Schema.String),
   model: Schema.optional(Schema.String),
-  status: Schema.Literals(["working", "idle"]),
+  name: Schema.String,
   note: Schema.optional(Schema.String),
-  reservations: Schema.Array(Reservation),
+  pid: Schema.Int,
+  recent: Schema.Array(RecentEditSchema).pipe(
+    Schema.withDecodingDefault(Effect.succeed([]))
+  ),
+  reservations: Schema.Array(ReservationSchema),
+  sessionId: Schema.String,
+  status: Schema.Literals(["working", "idle"]),
   subagents: Schema.Finite.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-  recent: Schema.Array(RecentEdit).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  title: Schema.optional(Schema.String),
   updatedAt: Schema.Finite,
 });
 
-export type Peer = typeof Peer.Type;
-export type Reservation = typeof Reservation.Type;
-export type RecentEdit = typeof RecentEdit.Type;
+export type Peer = typeof PeerSchema.Type;
+
+export type Reservation = typeof ReservationSchema.Type;
+
+export type RecentEdit = typeof RecentEditSchema.Type;
