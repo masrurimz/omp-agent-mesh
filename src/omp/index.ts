@@ -147,7 +147,7 @@ export default function meshExtension(pi: ExtensionAPI) {
 
   const deliver = (message: MeshMessage) =>
     Effect.sync(() => {
-      if (message.broadcast) {
+      if (message.broadcast && message.wake !== true) {
         pi.sendMessage(
           {
             content: `Broadcast from ${message.from}: ${message.body}`,
@@ -160,10 +160,14 @@ export default function meshExtension(pi: ExtensionAPI) {
         return;
       }
 
+      const heading = message.broadcast
+        ? `Broadcast from ${message.from}, mentioning you`
+        : `Message from ${message.from}`;
+
       pi.sendMessage(
         {
-          content: `Message from ${message.from}: ${message.body}\nReply with the mesh tool: send to "${message.from}".`,
-          customType: "mesh-message",
+          content: `${heading}: ${message.body}\nReply with the mesh tool: send to "${message.from}".`,
+          customType: message.broadcast ? "mesh-broadcast" : "mesh-message",
           display: true,
         },
         ASIDE_OPTIONS

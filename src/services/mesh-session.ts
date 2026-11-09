@@ -23,6 +23,8 @@ import {
   broadcastTargets,
   effectiveGroup,
   generateName,
+  mentionsPeer,
+  mentionTokens,
   resolveTarget,
 } from "../domain/peers.ts";
 import type { BroadcastScope } from "../domain/peers.ts";
@@ -150,7 +152,7 @@ export class MeshSession extends Context.Service<MeshSession>()(
       yield* inbox.messages(input.sessionId, startOffset).pipe(
         Stream.filter((message) => message.from !== name),
         Stream.runForEach((message) =>
-          (message.broadcast
+          (message.broadcast && message.wake !== true
             ? Effect.void
             : SubscriptionRef.update(state, (s) => ({
                 ...s,
@@ -233,6 +235,13 @@ export class MeshSession extends Context.Service<MeshSession>()(
         yield* requireBody("broadcast", body);
         const waitedMs = yield* throttle.acquire;
         const targets = broadcastTargets(yield* livePeers, input.group, scope);
+        const tokens = mentionTokens(body);
+        const woken = targets.filter((target) => mentionsPeer(tokens, target));
+
+        const unmatched = tokens.filter(
+          (token) => !woken.some((target) => mentionsPeer([token], target))
+        );
+
         const at = yield* Clock.currentTimeMillis;
         yield* Effect.forEach(
           targets,
@@ -243,6 +252,7 @@ export class MeshSession extends Context.Service<MeshSession>()(
               broadcast: true,
               from: name,
               to: target.name,
+              wake: woken.includes(target),
             }),
           { discard: true }
         );
@@ -252,7 +262,12 @@ export class MeshSession extends Context.Service<MeshSession>()(
           type: "message",
         });
 
-        return { recipients: targets.length, waitedMs };
+        return {
+          recipients: targets.length,
+          unmatched,
+          waitedMs,
+          woken: woken.map((target) => target.name),
+        };
       });
 
       const claim = Effect.fn("MeshSession.claim")(function* claim(

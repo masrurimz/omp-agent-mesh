@@ -1,6 +1,6 @@
 {
   "name": "omp-agent-mesh",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "omp extension that lets separate omp sessions see, message, and coordinate with each other. Own Effect-based mesh engine: repo groups, presence, waking messages, throttled sends, file claims, subagent attribution.",
   "license": "MIT",
   "repository": {
@@ -13,7 +13,7 @@
     "fmt": "oxfmt --check .",
     "fmt:write": "oxfmt --write .",
     "typecheck": "effect-tsrs diagnostics --project tsconfig.json --strict",
-    "typecheck:fast": "bun check --no-script --threads 4",
+    "typecheck:fast": "tsrs --noEmit -p tsconfig.json",
     "test": "vitest run",
     "smoke": "bun scripts/smoke.ts",
     "check": "bun run lint && bun run fmt && bun run typecheck && bun run typecheck:fast && bun run test"

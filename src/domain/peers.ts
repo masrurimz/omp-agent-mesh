@@ -69,6 +69,26 @@ export const titleCard = (title: string | undefined): string | undefined =>
     ? undefined
     : /(?<card>[A-Z][A-Z0-9_-]{1,15}):/u.exec(title)?.groups?.card;
 
+const MENTION = /(?<![\w.@])@(?<token>[A-Za-z][A-Za-z0-9_-]*)/gu;
+
+export const mentionTokens = (body: string): readonly string[] => [
+  ...new Set(
+    Array.from(body.matchAll(MENTION), (match) => match.groups?.token ?? "")
+  ),
+];
+
+export const mentionsPeer = (
+  tokens: readonly string[],
+  target: Peer
+): boolean => {
+  const handle = target.name.toLowerCase();
+  const card = titleCard(target.title);
+
+  return tokens.some(
+    (token) => token.toLowerCase() === handle || token === card
+  );
+};
+
 export const resolveTarget = (
   peers: readonly Peer[],
   query: string

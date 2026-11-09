@@ -92,7 +92,9 @@ export const MeshOutputSchema = Schema.Union([
     action: Schema.Literal("broadcast"),
     recipients: Schema.Int,
     scope: Scope,
+    unmatched: Schema.Array(Schema.String),
     waitedMs: Schema.Finite,
+    woken: Schema.Array(Schema.String),
   }),
   Schema.Struct({
     action: Schema.Literal("claim"),
@@ -135,7 +137,15 @@ export const renderOutput = (output: MeshOutput): string => {
     }
 
     case "broadcast": {
-      return `Broadcast (${output.scope}) sent to ${output.recipients} agent${output.recipients === 1 ? "" : "s"}.${waited(output.waitedMs)}`;
+      const woken =
+        output.woken.length > 0 ? ` Woke ${output.woken.join(", ")}.` : "";
+
+      const unmatched =
+        output.unmatched.length > 0
+          ? ` No peer in scope matches ${output.unmatched.map((token) => `@${token}`).join(", ")}, so nobody was woken for it.`
+          : "";
+
+      return `Broadcast (${output.scope}) sent to ${output.recipients} agent${output.recipients === 1 ? "" : "s"}.${woken}${unmatched}${waited(output.waitedMs)}`;
     }
 
     case "claim": {
@@ -174,7 +184,7 @@ export const meshContract: MeshToolContract<
   MeshFailure
 > = {
   description:
-    "Coordinate with other omp sessions on this machine. Actions: peers (who is online), send (to: handle, title card, or title text; body), broadcast (body; scope group by default, all for every repo), claim (paths), release (paths optional), note (body), feed, leave.",
+    "Coordinate with other omp sessions on this machine. Actions: peers (who is online), send (to: handle, title card, or title text; body; wakes an idle recipient), broadcast (body; scope group by default, all for every repo; idle peers read it on their next turn, except peers mentioned in the body as @Handle or @CARD (title card), who are woken like send), claim (paths), release (paths optional), note (body), feed, leave. Ask a question or need a reply: send, or @mention in the broadcast.",
   failure: MeshFailureSchema,
   input: MeshInputSchema,
   label: "Mesh",

@@ -6,6 +6,7 @@ export const MeshMessageSchema = Schema.Struct({
   broadcast: Schema.Boolean,
   from: Schema.String,
   to: Schema.String,
+  wake: Schema.optionalKey(Schema.Boolean),
 });
 
 export const FeedEventSchema = Schema.Struct({

@@ -12,6 +12,8 @@ import {
 import {
   broadcastTargets,
   effectiveGroup,
+  mentionsPeer,
+  mentionTokens,
   repoGroup,
   resolveTarget,
 } from "../src/domain/peers.ts";
@@ -123,6 +125,34 @@ describe("broadcastTargets", () => {
       );
     }
   );
+});
+
+describe("broadcast mentions", () => {
+  const land = peer("1", { name: "VastCarpetsServe", title: "LAND: redesign" });
+  const sort = peer("2", { name: "ItchyCooksSpend", title: "SORT: default" });
+
+  const mentioned = (body: string) => {
+    const tokens = mentionTokens(body);
+
+    return [land, sort].flatMap((p) =>
+      mentionsPeer(tokens, p) ? [p.name] : []
+    );
+  };
+
+  it("wakes by handle in any case or by exact title card, never from emails or lowercase cards", () => {
+    assert.deepStrictEqual(mentioned("LAND (@vastcarpetsserve): ready?"), [
+      "VastCarpetsServe",
+    ]);
+    assert.deepStrictEqual(mentioned("@SORT: rebase now. @LAND's PR waits."), [
+      "VastCarpetsServe",
+      "ItchyCooksSpend",
+    ]);
+    assert.deepStrictEqual(
+      mentioned("mail ops@VastCarpetsServe.dev, or @land"),
+      []
+    );
+    assert.deepStrictEqual(mentioned("LAND: is #642 shipping?"), []);
+  });
 });
 
 describe("paths and roots", () => {

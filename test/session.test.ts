@@ -2,7 +2,7 @@
 import path from "node:path";
 
 import { assert, describe, it } from "@effect/vitest";
-import { Effect, Exit, FileSystem, Option, Scope } from "effect";
+import { Effect, Exit, FileSystem, Option, Scope, Stream } from "effect";
 
 import { Feed } from "../src/services/feed.ts";
 import { MainRegistry } from "../src/services/main-registry.ts";
@@ -13,6 +13,9 @@ import { bodiesOf, deliveries, joinInput, withMesh } from "./support.ts";
 
 const open = (scope: Scope.Scope, sessionId: string) =>
   MeshSession.make(joinInput(sessionId)).pipe(Scope.provide(scope));
+
+const statusOf = (session: MeshSession["Service"]) =>
+  session.status.pipe(Stream.runHead, Effect.map(Option.getOrElse(() => "")));
 
 describe("session lifecycle", () => {
   it.live(
@@ -114,6 +117,37 @@ describe("messaging", () => {
             "hello B",
             "all hands",
           ]);
+
+          yield* Scope.close(scope, Exit.void);
+        })
+      )
+  );
+
+  it.live(
+    "a broadcast wakes only the peer it @mentions and reports mentions that match nobody",
+    () =>
+      withMesh(
+        Effect.gen(function* mentionWakes() {
+          const scope = yield* Scope.make();
+          const a = yield* open(scope, "a");
+          const b = yield* open(scope, "b");
+          const c = yield* open(scope, "c");
+
+          const out = yield* a.broadcast(
+            `@${b.name} is your PR shipping? cc @Nobody`,
+            "group"
+          );
+
+          assert.strictEqual(out.recipients, 2);
+          assert.deepStrictEqual(out.woken, [b.name]);
+          assert.deepStrictEqual(out.unmatched, ["Nobody"]);
+
+          const [toB] = yield* deliveries(b, 1);
+          const [toC] = yield* deliveries(c, 1);
+          assert.isTrue(toB?.wake);
+          assert.isFalse(toC?.wake);
+          assert.include(yield* statusOf(b), "●1");
+          assert.notInclude(yield* statusOf(c), "●");
 
           yield* Scope.close(scope, Exit.void);
         })

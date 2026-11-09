@@ -6,12 +6,13 @@ Each main session joins a mesh on startup: it can list live peers, send messages
 
 There is no daemon and no server. Agents coordinate through files under `~/.omp/agent/mesh/` (presence, inboxes, feed), maintained by the extension inside each omp process.
 
-History: v0.1 wrapped pi-messenger. v0.2 was our own imperative engine. v0.3 rebuilt it on Effect 4. v0.4 made it idiomatic Effect: typed errors, `Context.Service` services composed in one layer, a Schema-derived tool contract, live state on `SubscriptionRef`/`PubSub`, and `@effect/vitest` property tests. v0.5 replaces the hand-built lifecycle with an XState v6 machine hosted by `@xstate/effect`, following the [rat-stack](https://ratstack.sh/AGENTS.md) convention: the machine owns the states, declared Effect actors own the side effects.
+History: v0.1 wrapped pi-messenger. v0.2 was our own imperative engine. v0.3 rebuilt it on Effect 4. v0.4 made it idiomatic Effect: typed errors, `Context.Service` services composed in one layer, a Schema-derived tool contract, live state on `SubscriptionRef`/`PubSub`, and `@effect/vitest` property tests. v0.5 replaces the hand-built lifecycle with an XState v6 machine hosted by `@xstate/effect`, following the [rat-stack](https://ratstack.sh/AGENTS.md) convention: the machine owns the states, declared Effect actors own the side effects. v0.6 lets a broadcast wake the peers it `@` mentions.
 
 ## Concepts
 
 - **Repo group.** Sessions in the same git repository (including its worktrees) form a group. `peers` lists your group first, `broadcast` defaults to it, and the startup brief only names group members. `peers` with `all: true` and `broadcast` with `scope: "all"` reach other repos.
 - **Title addressing.** `send` accepts an agent handle (`GoldXenon`), a title card (the `PLAN` in a session titled `PLAN: auth rewrite`), or a substring of a title. Ambiguous matches are rejected with the candidate handles.
+- **Who gets woken.** `send` wakes the recipient, even when its session is idle. A `broadcast` is read by idle peers on their next turn, so it never starts a turn for everyone. The exception is a peer mentioned in the body as `@Handle` (any case) or `@CARD` (its exact title card, such as `@PLAN`): that peer is woken like `send`. The tool output names who was woken and lists any `@` mention that matched no peer in scope. Questions and requests that need a reply go through `send` or an `@` mention.
 - **Subagent attribution.** A subagent's `edit`/`write` is checked against other agents' claims and blocked like any peer's. Allowed edits are recorded on the parent's presence (`subagents` running count, `recent` edits labelled with the subagent) and in the feed as `<Parent>/<subagent>`. Peers render it as `@GoldXenon — repo — working — 3 subagents — last edit src/auth.ts (scout)`.
 
 ## Install
@@ -52,6 +53,7 @@ Agents only coordinate if they are told to. Add something like this to your glob
 - Heavy shared work (docker, e2e, migrations, full builds): if a peer's status shows the same work, message them with `mesh` action `send` and wait instead of running in parallel.
 - Before editing files outside your own worktree, claim them with `mesh` action `claim`. Release with action `release` when done. Edits to files another agent claimed are blocked automatically.
 - If your change affects a peer's work (API, schema, shared config), message them. `broadcast` defaults to your repo group; pass `scope: "all"` for every agent on the machine. `send` accepts a handle or a title card such as `PLAN`.
+- A broadcast does not wake idle peers. When you need a reply, use `send`, or mention the peer in the broadcast as `@Handle` or `@CARD`.
 ```
 
 ## How it works
@@ -94,7 +96,7 @@ Tracked as issues:
 bun run lint        # oxlint (the fence: ultracite core, vendored anti-slop, rat-stack plugins)
 bun run fmt         # oxfmt --check
 bun run typecheck   # effect-tsrs diagnostics --strict
-bun run typecheck:fast # bun check --no-script --threads 4
+bun run typecheck:fast # tsrs --noEmit (TS7 native checker)
 bun run test        # vitest run (@effect/vitest, property tests)
 bun run smoke       # real omp processes; needs a configured model provider
 bun run check       # all of the above except smoke, in order
